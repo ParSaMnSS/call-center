@@ -1,15 +1,24 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import type { Call } from "@/lib/supabase/types";
 import { StatusBadge } from "@/components/status-badge";
 import { SentimentDot } from "@/components/sentiment-dot";
+import { useToast } from "@/components/toast";
+import { useConfirm } from "@/components/confirm-dialog";
 import { formatFaDate, resolvedLabel, t } from "@/lib/strings";
+import { cancelCall, deleteCall } from "@/lib/actions";
 
 export function CallDetail({ initial, audioUrl }: { initial: Call; audioUrl: string | null }) {
+  const router = useRouter();
+  const toast = useToast();
+  const confirm = useConfirm();
   const [call, setCall] = useState<Call>(initial);
   const [reprocessing, startReprocess] = useTransition();
+  const [cancelling, startCancel] = useTransition();
+  const [deleting, startDelete] = useTransition();
 
   useEffect(() => {
     const sb = createClient();
@@ -18,9 +27,7 @@ export function CallDetail({ initial, audioUrl }: { initial: Call; audioUrl: str
       .on(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "calls", filter: `id=eq.${call.id}` },
-        (payload) => {
-          setCall((prev) => ({ ...prev, ...(payload.new as Call) }));
-        }
+        (payload) => { setCall((prev) => ({ ...prev, ...(payload.new as Call) })); }
       )
       .subscribe();
     return () => { sb.removeChannel(channel); };
@@ -28,42 +35,83 @@ export function CallDetail({ initial, audioUrl }: { initial: Call; audioUrl: str
 
   function reprocess() {
     startReprocess(async () => {
-      await fetch(`/api/process/${call.id}`, { method: "POST" });
+      const res = await fetch(`/api/process/${call.id}`, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        toast.show(body.error || "خطا در تحلیل مجدد", "error");
+      } else {
+        toast.show("تحلیل مجدد آغاز شد", "info");
+      }
+    });
+  }
+
+  function handleCancel() {
+    startCancel(async () => {
+      const res = await cancelCall(call.id);
+      if (res.error) toast.show(res.error, "error");
+      else toast.show("تماس لغو شد", "info");
+    });
+  }
+
+  async function handleDelete() {
+    const ok = await confirm({
+      title: t.confirmDelete,
+      message: "این عمل غیرقابل بازگشت است. فایل صوتی و تمام داده‌های تحلیل‌شده پاک می‌شود.",
+      confirmLabel: t.delete,
+      cancelLabel: "انصراف",
+      kind: "danger",
+    });
+    if (!ok) return;
+    startDelete(async () => {
+      const res = await deleteCall(call.id);
+      if (res.error) {
+        toast.show(res.error, "error");
+        return;
+      }
+      toast.show("تماس حذف شد", "success");
+      router.push("/dashboard");
     });
   }
 
   const isProcessing = call.status === "pending" || call.status === "transcribing" || call.status === "analyzing";
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Header */}
-      <div className="panel p-5">
+      <div className="panel p-4 md:p-5">
         <div className="flex items-start justify-between flex-wrap gap-3">
-          <div>
-            <h1 className="text-xl font-bold">{t.callDetail}</h1>
-            <div className="text-sm text-muted mt-1 fa-nums">
+          <div className="min-w-0">
+            <h1 className="text-lg md:text-xl font-bold">{t.callDetail}</h1>
+            <div className="text-xs md:text-sm text-muted mt-1 fa-nums">
               {formatFaDate(call.created_at)}
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <StatusBadge status={call.status} />
-            {call.status === "done" && (
-              <button onClick={reprocess} disabled={reprocessing} className="btn text-sm">
+            {isProcessing && (
+              <button onClick={handleCancel} disabled={cancelling} className="btn text-sm">
+                {cancelling ? t.cancelling : t.cancel}
+              </button>
+            )}
+            {(call.status === "done" || call.status === "failed") && (
+              <button
+                onClick={reprocess}
+                disabled={reprocessing}
+                className={"btn text-sm " + (call.status === "failed" ? "btn-primary" : "")}
+              >
                 {reprocessing ? t.reprocessing : t.reprocess}
               </button>
             )}
-            {call.status === "failed" && (
-              <button onClick={reprocess} disabled={reprocessing} className="btn btn-primary text-sm">
-                {reprocessing ? t.reprocessing : t.reprocess}
-              </button>
-            )}
+            <button onClick={handleDelete} disabled={deleting} className="btn btn-danger text-sm">
+              {deleting ? t.deleting : t.delete}
+            </button>
           </div>
         </div>
 
         {call.status === "failed" && call.error_message && (
           <div className="mt-4 text-sm bg-danger/10 border border-danger/30 text-danger rounded-lg px-3 py-2">
             <div className="font-semibold mb-0.5">{t.errorOccurred}</div>
-            <div className="text-xs opacity-90">{call.error_message}</div>
+            <div className="text-xs opacity-90 break-words">{call.error_message}</div>
           </div>
         )}
 
@@ -72,8 +120,8 @@ export function CallDetail({ initial, audioUrl }: { initial: Call; audioUrl: str
             <div className="h-1 w-full bg-panel2 rounded overflow-hidden">
               <div className="h-full w-1/2 bg-gradient-to-r from-accent to-accent2 animate-pulse" />
             </div>
-            <div className="text-xs text-muted mt-2">
-              این فرایند ممکن است چند دقیقه طول بکشد. می‌توانید این صفحه را باز نگه دارید — به‌روزرسانی به‌صورت زنده انجام می‌شود.
+            <div className="text-xs text-muted mt-2 leading-6">
+              ممکن است چند دقیقه طول بکشد. به‌روزرسانی به‌صورت زنده انجام می‌شود.
             </div>
           </div>
         )}
@@ -81,21 +129,24 @@ export function CallDetail({ initial, audioUrl }: { initial: Call; audioUrl: str
 
       {/* Audio player */}
       {audioUrl && (
-        <div className="panel p-5">
-          <div className="text-sm text-muted mb-3">{t.audio}</div>
+        <div className="panel p-4 md:p-5">
+          <div className="flex items-center justify-between mb-3 text-xs text-muted">
+            <span>{t.audio}</span>
+            {call.audio_duration_sec != null && (
+              <span className="fa-nums">
+                {Math.floor(call.audio_duration_sec / 60).toLocaleString("fa-IR")}:
+                {String(call.audio_duration_sec % 60).padStart(2, "0")}
+              </span>
+            )}
+          </div>
           <audio controls src={audioUrl} className="w-full" />
-          {call.audio_duration_sec && (
-            <div className="text-xs text-muted mt-2 fa-nums">
-              مدت: {Math.floor(call.audio_duration_sec / 60).toLocaleString("fa-IR")}:{String(call.audio_duration_sec % 60).padStart(2, "0")}
-            </div>
-          )}
         </div>
       )}
 
       {/* Two columns: extracted + transcript */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
         {/* Extracted */}
-        <div className="lg:col-span-2 panel p-5">
+        <div className="lg:col-span-2 panel p-4 md:p-5 self-start lg:sticky lg:top-4">
           <h2 className="text-sm font-semibold text-muted mb-4">{t.extracted}</h2>
           <dl className="space-y-3 text-sm">
             <Field label={t.callerName} value={call.caller_name} />
@@ -168,10 +219,10 @@ export function CallDetail({ initial, audioUrl }: { initial: Call; audioUrl: str
         </div>
 
         {/* Transcript */}
-        <div className="lg:col-span-3 panel p-5">
+        <div className="lg:col-span-3 panel p-4 md:p-5">
           <h2 className="text-sm font-semibold text-muted mb-4">{t.transcript}</h2>
           {call.transcript ? (
-            <div className="max-h-[70vh] overflow-y-auto leading-8 whitespace-pre-wrap text-sm">
+            <div className="max-h-[70vh] overflow-y-auto leading-8 whitespace-pre-wrap text-sm pe-2">
               {call.transcript}
             </div>
           ) : isProcessing ? (
@@ -181,6 +232,7 @@ export function CallDetail({ initial, audioUrl }: { initial: Call; audioUrl: str
               <div className="skeleton h-4 w-10/12" />
               <div className="skeleton h-4 w-9/12" />
               <div className="skeleton h-4 w-full" />
+              <div className="skeleton h-4 w-8/12" />
             </div>
           ) : (
             <div className="text-muted text-sm">{t.unknown}</div>

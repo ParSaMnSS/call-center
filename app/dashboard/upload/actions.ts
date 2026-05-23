@@ -1,10 +1,11 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
-import { redirect } from "next/navigation";
+import { extractPhoneFromFilename } from "@/lib/phone";
 
-const MAX_BYTES = 25 * 1024 * 1024; // 25 MB (Whisper single-shot limit)
-const ALLOWED = ["audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/wave", "audio/mp4", "audio/m4a", "audio/x-m4a", "audio/ogg", "audio/webm"];
+// Gemini's inline audio limit is ~20MB request size. We give a small buffer.
+const MAX_BYTES = 20 * 1024 * 1024;
+const ALLOWED_EXT = ["mp3", "wav", "m4a", "ogg", "webm", "mp4", "aac", "flac"];
 
 function safeExt(name: string): string {
   const m = name.match(/\.([a-zA-Z0-9]+)$/);
@@ -12,43 +13,48 @@ function safeExt(name: string): string {
   return ext.slice(0, 6);
 }
 
-export async function uploadCallAudio(formData: FormData): Promise<{ error?: string; id?: string }> {
+export type UploadResult = {
+  ok: boolean;
+  id?: string;
+  filename: string;
+  error?: string;
+};
+
+export async function uploadOneCall(formData: FormData): Promise<UploadResult> {
   const file = formData.get("file");
+  const fname = (file instanceof File ? file.name : "") || "audio";
+
   if (!(file instanceof File) || file.size === 0) {
-    return { error: "فایلی انتخاب نشده است" };
+    return { ok: false, filename: fname, error: "فایلی انتخاب نشده است" };
   }
   if (file.size > MAX_BYTES) {
-    return { error: "حجم فایل بیش از حد مجاز است (حداکثر ۲۵ مگابایت)" };
+    return { ok: false, filename: fname, error: "حجم فایل بیش از حد مجاز است (حداکثر ۲۰ مگابایت)" };
   }
-  if (file.type && !ALLOWED.includes(file.type)) {
-    // Allow unknown types based on extension as a fallback
-    const ext = safeExt(file.name);
-    if (!["mp3", "wav", "m4a", "ogg", "webm", "mp4"].includes(ext)) {
-      return { error: "نوع فایل پشتیبانی نمی‌شود" };
-    }
+  const ext = safeExt(file.name);
+  if (!ALLOWED_EXT.includes(ext)) {
+    return { ok: false, filename: fname, error: "نوع فایل پشتیبانی نمی‌شود" };
   }
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: "احراز هویت نشده‌اید" };
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { ok: false, filename: fname, error: "احراز هویت نشده‌اید" };
 
-  // Insert row first to get an ID
-  const ext = safeExt(file.name);
+  // Pre-extract phone from filename — show it immediately in the UI
+  const phoneHint = extractPhoneFromFilename(file.name);
+
   const { data: row, error: insErr } = await supabase
     .from("calls")
     .insert({
       uploaded_by: user.id,
       audio_path: "pending",
       status: "pending",
+      caller_phone: phoneHint, // Best guess until AI confirms/overrides
     })
     .select("id")
     .single();
-  if (insErr || !row) return { error: insErr?.message ?? "خطا در ایجاد رکورد" };
+  if (insErr || !row) return { ok: false, filename: fname, error: insErr?.message ?? "خطا در ایجاد رکورد" };
 
   const path = `${user.id}/${row.id}.${ext}`;
-
   const bytes = new Uint8Array(await file.arrayBuffer());
   const { error: upErr } = await supabase.storage
     .from("call-audio")
@@ -61,14 +67,19 @@ export async function uploadCallAudio(formData: FormData): Promise<{ error?: str
       status: "failed",
       error_message: `خطا در بارگذاری فایل: ${upErr.message}`,
     }).eq("id", row.id);
-    return { error: upErr.message };
+    return { ok: false, filename: fname, error: upErr.message };
   }
 
   await supabase.from("calls").update({ audio_path: path }).eq("id", row.id);
 
-  // Fire-and-forget processor call. We don't await so the user is redirected immediately.
+  // Fire-and-forget processor. Pass the original filename so Gemini can use
+  // the embedded phone number when the call audio doesn't say it aloud.
   const base = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-  fetch(`${base}/api/process/${row.id}`, { method: "POST" }).catch(() => {});
+  fetch(`${base}/api/process/${row.id}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ filename: file.name }),
+  }).catch(() => {});
 
-  redirect(`/dashboard/calls/${row.id}`);
+  return { ok: true, id: row.id, filename: fname };
 }

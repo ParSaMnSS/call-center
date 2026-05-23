@@ -1,18 +1,32 @@
 import { NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
-import { transcribeAudio, analyzeTranscript } from "@/lib/openai";
+import { analyzeAudio } from "@/lib/ai";
+import { extractPhoneFromFilename } from "@/lib/phone";
 
 export const runtime = "nodejs";
 export const maxDuration = 300; // 5 min — accommodate long calls
 
+async function isAborted(sb: ReturnType<typeof createServiceClient>, id: string): Promise<boolean> {
+  const { data } = await sb.from("calls").select("status").eq("id", id).maybeSingle();
+  if (!data) return true;
+  if (data.status === "failed") return true;
+  return false;
+}
+
 export async function POST(
-  _req: Request,
+  req: Request,
   ctx: { params: Promise<{ id: string }> }
 ) {
   const { id } = await ctx.params;
   const sb = createServiceClient();
 
-  // Fetch the call row
+  // Optional filename hint from upload action
+  let filenameHint: string | null = null;
+  try {
+    const body = await req.json();
+    if (body && typeof body.filename === "string") filenameHint = body.filename;
+  } catch { /* no body / not JSON / reprocess from UI */ }
+
   const { data: call, error } = await sb
     .from("calls")
     .select("id, audio_path, status")
@@ -27,8 +41,7 @@ export async function POST(
   }
 
   try {
-    // ----- Transcription -----
-    await sb.from("calls").update({ status: "transcribing", error_message: null }).eq("id", id);
+    await sb.from("calls").update({ status: "analyzing", error_message: null }).eq("id", id);
 
     const { data: signed, error: signErr } = await sb.storage
       .from("call-audio")
@@ -39,27 +52,35 @@ export async function POST(
     if (!resp.ok) throw new Error(`خطا در دانلود فایل صوتی (${resp.status})`);
     const blob = await resp.blob();
 
-    const fname = call.audio_path.split("/").pop() || "audio";
-    const file = new File([blob], fname, { type: blob.type || "audio/mpeg" });
+    const storedName = call.audio_path.split("/").pop() || "audio";
+    const file = new File([blob], storedName, { type: blob.type || "audio/mpeg" });
 
-    const { text: transcript, duration } = await transcribeAudio(file);
+    // Use the original upload filename as a hint to Gemini (phone is usually there).
+    // On reprocess we don't have it, so fall back to the storage filename.
+    const hintName = filenameHint || storedName;
+    const phoneHint = extractPhoneFromFilename(hintName);
 
-    if (!transcript || transcript.trim().length === 0) {
+    const { analysis } = await analyzeAudio(file, {
+      filenameHint: hintName,
+      phoneHint,
+    });
+
+    if (!analysis.transcript || analysis.transcript.trim().length === 0) {
       throw new Error("متن مکالمه استخراج نشد. ممکن است فایل صوتی نامفهوم باشد.");
     }
 
-    await sb.from("calls").update({
-      transcript,
-      audio_duration_sec: duration ? Math.round(duration) : null,
-      status: "analyzing",
-    }).eq("id", id);
+    if (await isAborted(sb, id)) {
+      return NextResponse.json({ ok: true, aborted: true });
+    }
 
-    // ----- Analysis -----
-    const analysis = await analyzeTranscript(transcript);
+    // Prefer the AI-extracted phone if it found one in the audio;
+    // otherwise keep the filename-derived hint we saved at upload time.
+    const finalPhone = analysis.caller_phone || phoneHint;
 
     await sb.from("calls").update({
+      transcript: analysis.transcript,
       caller_name: analysis.caller_name,
-      caller_phone: analysis.caller_phone,
+      caller_phone: finalPhone,
       agent_name: analysis.agent_name,
       issue_summary: analysis.issue_summary,
       resolved: analysis.resolved,
@@ -77,10 +98,12 @@ export async function POST(
     return NextResponse.json({ ok: true });
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : "خطای ناشناخته";
-    await sb.from("calls").update({
-      status: "failed",
-      error_message: message,
-    }).eq("id", id);
+    if (!(await isAborted(sb, id))) {
+      await sb.from("calls").update({
+        status: "failed",
+        error_message: message,
+      }).eq("id", id);
+    }
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
