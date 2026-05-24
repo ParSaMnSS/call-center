@@ -10,6 +10,7 @@ import { useToast } from "@/components/toast";
 import { useConfirm } from "@/components/confirm-dialog";
 import { formatFaDate, resolvedLabel, t } from "@/lib/strings";
 import { cancelCall, deleteCall } from "@/lib/actions";
+import { kickWorker } from "@/app/dashboard/upload/actions";
 import { QueueInfo, medianProcessingSeconds } from "@/components/queue-info";
 
 export function CallDetail({ initial, audioUrl }: { initial: Call; audioUrl: string | null }) {
@@ -19,6 +20,16 @@ export function CallDetail({ initial, audioUrl }: { initial: Call; audioUrl: str
   const [call, setCall] = useState<Call>(initial);
   // Other in-flight + recently-done calls, used by QueueInfo for position + median ETA.
   const [queueCalls, setQueueCalls] = useState<Call[]>([initial]);
+
+  // Safety net: if the user lands here while the call is still pending,
+  // kick the worker. Idempotent — no-op if the worker is already running.
+  useEffect(() => {
+    if (initial.status === "pending") {
+      kickWorker();
+    }
+    // Only on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [reprocessing, startReprocess] = useTransition();
   const [cancelling, startCancel] = useTransition();
   const [deleting, startDelete] = useTransition();

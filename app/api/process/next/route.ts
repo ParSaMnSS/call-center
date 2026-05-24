@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { processCall } from "@/lib/process";
 import { getAppBaseUrl } from "@/lib/base-url";
@@ -31,10 +31,15 @@ export async function POST() {
   await processCall(sb, claimed.id, claimed.audio_path, claimed.original_filename);
   console.log(`[worker] finished ${claimed.id} in ${Math.round((Date.now() - t0) / 1000)}s`);
 
-  // Chain: fire-and-forget next pending call.
+  // Chain to the next pending call. `after()` keeps the function alive
+  // long enough for the kick to actually go out.
   const base = getAppBaseUrl();
-  fetch(`${base}/api/process/next`, { method: "POST" }).catch((e) => {
-    console.error("[worker] chain kick failed:", e);
+  after(async () => {
+    try {
+      await fetch(`${base}/api/process/next`, { method: "POST" });
+    } catch (e) {
+      console.error("[worker] chain kick failed:", e);
+    }
   });
 
   return NextResponse.json({ ok: true, claimed: true, id: claimed.id });

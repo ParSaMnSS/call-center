@@ -1,5 +1,6 @@
 "use server";
 
+import { after } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { extractPhoneFromFilename } from "@/lib/phone";
 import { getAppBaseUrl } from "@/lib/base-url";
@@ -74,10 +75,19 @@ export async function uploadOneCall(formData: FormData): Promise<UploadResult> {
 
   await supabase.from("calls").update({ audio_path: path }).eq("id", row.id);
 
-  // Note: we do NOT fire the processor here anymore. The serial worker at
-  // /api/process/next picks up pending rows one at a time. The upload form
-  // calls /next once after the batch is uploaded, and the worker chains
-  // through the queue itself.
+  // Kick the serial worker. Using `after()` defers the request until the
+  // response is sent but keeps the function alive long enough for the
+  // fetch to actually go out — avoids the race where the action returns,
+  // the user navigates away, and the in-flight kick gets aborted.
+  const base = getAppBaseUrl();
+  after(async () => {
+    try {
+      await fetch(`${base}/api/process/next`, { method: "POST" });
+    } catch (e) {
+      console.error("[uploadOneCall] worker kick failed:", e);
+    }
+  });
+
   return { ok: true, id: row.id, filename: fname };
 }
 

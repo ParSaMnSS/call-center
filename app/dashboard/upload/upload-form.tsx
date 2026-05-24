@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { uploadOneCall, kickWorker } from "./actions";
+import { uploadOneCall } from "./actions";
 import { useToast } from "@/components/toast";
 import { extractPhoneFromFilename } from "@/lib/phone";
 import { t } from "@/lib/strings";
@@ -76,11 +76,9 @@ export function UploadForm() {
 
     setUploading(false);
 
-    // Kick the serial worker once the batch is uploaded. The worker
-    // claims rows one at a time and chains itself.
-    if (successCount > 0) {
-      await kickWorker();
-    }
+    // Note: the worker kick now happens server-side inside uploadOneCall
+    // (via `after()`), so it survives the user navigating away. No client-side
+    // kick needed.
 
     if (successCount > 0 && errorCount === 0) {
       toast.show(successCount === 1 ? t.uploadSuccess : t.uploadSuccessMany(successCount), "success");
