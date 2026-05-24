@@ -14,6 +14,7 @@ export function Shell({ children, email }: { children: React.ReactNode; email: s
 
   const navItems = [
     { href: "/dashboard", label: t.navDashboard, dot: "bg-accent" },
+    { href: "/dashboard/summary", label: t.navSummary, dot: "bg-warn" },
     { href: "/dashboard/upload", label: t.navUpload, dot: "bg-accent2" },
   ];
 

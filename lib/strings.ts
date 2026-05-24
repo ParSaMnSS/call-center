@@ -5,8 +5,35 @@ export const t = {
 
   // Nav
   navDashboard: "داشبورد",
+  navSummary: "خلاصه",
   navUpload: "بارگذاری تماس",
   navLogout: "خروج",
+
+  // Summary page
+  summaryTitle: "خلاصه گروهی",
+  summarySubtitle: "نمای کلی تماس‌ها در بازه انتخابی",
+  rangeToday: "امروز",
+  range7d: "۷ روز",
+  range30d: "۳۰ روز",
+  rangeAll: "همه",
+  kpiTotal: "مجموع تماس‌ها",
+  kpiResolutionRate: "نرخ حل‌شدن",
+  kpiFollowUp: "نیاز به پیگیری",
+  kpiNegativeCaller: "تماس‌گیرنده‌های ناراضی",
+  vsPrevious: "نسبت به بازه قبل",
+  byCategory: "بر اساس دسته‌بندی",
+  byAgent: "بر اساس کارشناس",
+  bySentiment: "احساس تماس‌گیرنده",
+  byResolution: "وضعیت حل",
+  topTags: "برچسب‌های پرتکرار",
+  dailyTrend: "روند روزانه",
+  monthlyTrend: "روند ماهانه",
+  noCallsInRange: "در این بازه تماسی ثبت نشده است",
+  inFlight: (n: number) => `${n.toLocaleString("fa-IR")} در حال پردازش`,
+  noAgent: "بدون کارشناس",
+  noCategory: "بدون دسته",
+  unknownBucket: "نامشخص",
+  topNAgents: (n: number) => `${n.toLocaleString("fa-IR")} کارشناس برتر`,
 
   // Login
   loginTitle: "ورود به سامانه",
@@ -158,4 +185,30 @@ export function formatFaDate(iso: string | Date): string {
   } catch {
     return d.toISOString();
   }
+}
+
+// Just the date portion (no time) — used for summary range headers.
+export function formatFaDateShort(iso: string | Date): string {
+  const d = typeof iso === "string" ? new Date(iso) : iso;
+  try {
+    return new Intl.DateTimeFormat("fa-IR", { dateStyle: "medium" }).format(d);
+  } catch {
+    return d.toISOString().slice(0, 10);
+  }
+}
+
+// Day-of-month label for daily-trend tooltips (e.g. "۱۲ خرداد").
+export function formatFaDayMonth(iso: string | Date): string {
+  const d = typeof iso === "string" ? new Date(iso) : iso;
+  try {
+    return new Intl.DateTimeFormat("fa-IR", { day: "numeric", month: "short" }).format(d);
+  } catch {
+    return d.toISOString().slice(0, 10);
+  }
+}
+
+export function formatFaPercent(fraction: number, opts: { signed?: boolean } = {}): string {
+  const sign = opts.signed && fraction > 0 ? "+" : "";
+  const pct = Math.round(fraction * 100);
+  return `${sign}${pct.toLocaleString("fa-IR")}٪`;
 }
