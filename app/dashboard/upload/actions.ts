@@ -2,7 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { extractPhoneFromFilename } from "@/lib/phone";
-import { getAppBaseUrl } from "@/lib/base-url";
+import { claimAndProcessNext } from "@/lib/process";
 
 // Gemini's inline audio limit is ~20MB request size. We give a small buffer.
 const MAX_BYTES = 20 * 1024 * 1024;
@@ -74,26 +74,26 @@ export async function uploadOneCall(formData: FormData): Promise<UploadResult> {
 
   await supabase.from("calls").update({ audio_path: path }).eq("id", row.id);
 
-  // Kick the worker. The worker route claims a row + returns immediately
-  // (~100ms), then processes in the background via after(). Awaiting here
-  // is cheap and guarantees the kick actually reaches the server before
-  // this action returns.
-  const base = getAppBaseUrl();
+  // Claim + start processing in-process. No HTTP hop, no self-fetch.
+  // claimAndProcessNext registers the actual Gemini work via after(),
+  // so this returns in ~50ms and the work runs after the response is sent.
+  console.log(`[uploadOneCall] row ${row.id} created, claiming worker slot`);
   try {
-    await fetch(`${base}/api/process/next`, { method: "POST" });
+    const res = await claimAndProcessNext();
+    console.log(`[uploadOneCall] claim result:`, res);
   } catch (e) {
-    console.error("[uploadOneCall] worker kick failed:", e);
+    console.error("[uploadOneCall] claim failed:", e);
   }
 
   return { ok: true, id: row.id, filename: fname };
 }
 
-// Kick off the serial worker (idempotent — if it's already running, the
-// claim RPC returns no rows and it exits cleanly).
+// Kick off the serial worker (idempotent — if no pending row, no-op).
+// Called from dashboard mount + detail page mount as a safety net.
 export async function kickWorker(): Promise<void> {
-  const base = getAppBaseUrl();
   try {
-    await fetch(`${base}/api/process/next`, { method: "POST" });
+    const res = await claimAndProcessNext();
+    console.log("[kickWorker] result:", res);
   } catch (e) {
     console.error("[kickWorker] failed:", e);
   }

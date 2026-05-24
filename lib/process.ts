@@ -5,9 +5,11 @@
 // (the claim RPC does this for the serial worker; the per-id route does it
 // explicitly).
 
+import { after } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { analyzeAudio } from "@/lib/ai";
 import { extractPhoneFromFilename } from "@/lib/phone";
+import { createServiceClient } from "@/lib/supabase/server";
 
 async function isAborted(sb: SupabaseClient, id: string): Promise<boolean> {
   const { data } = await sb.from("calls").select("status").eq("id", id).maybeSingle();
@@ -79,4 +81,45 @@ export async function processCall(
       }).eq("id", id);
     }
   }
+}
+
+// Claim the oldest pending call and process it in the background via after().
+// Returns immediately after the claim — the actual Gemini call runs after the
+// caller's response is sent. When it finishes, kicks itself again to grab
+// the next pending row.
+//
+// Safe to call from anywhere a Next.js request context exists (route handler,
+// server action, server component) — that's where after() can register
+// background work. Idempotent: if no pending row, returns { claimed: false }.
+export async function claimAndProcessNext(): Promise<
+  { claimed: false } | { claimed: true; id: string }
+> {
+  const sb = createServiceClient();
+
+  const { data, error } = await sb.rpc("claim_next_call");
+  if (error) {
+    console.error("[claimAndProcessNext] claim_next_call failed:", error.message);
+    throw new Error(error.message);
+  }
+  const claimed = (data as Array<{ id: string; audio_path: string; original_filename: string | null }> | null)?.[0];
+  if (!claimed) {
+    console.log("[claimAndProcessNext] no pending calls");
+    return { claimed: false };
+  }
+
+  console.log(`[claimAndProcessNext] claimed ${claimed.id} (${claimed.original_filename ?? claimed.audio_path}) — processing in background`);
+
+  after(async () => {
+    const t0 = Date.now();
+    await processCall(sb, claimed.id, claimed.audio_path, claimed.original_filename);
+    console.log(`[claimAndProcessNext] finished ${claimed.id} in ${Math.round((Date.now() - t0) / 1000)}s`);
+    // Chain to the next pending call directly — no HTTP round-trip.
+    try {
+      await claimAndProcessNext();
+    } catch (e) {
+      console.error("[claimAndProcessNext] chain failed:", e);
+    }
+  });
+
+  return { claimed: true, id: claimed.id };
 }
