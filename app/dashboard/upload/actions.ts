@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { extractPhoneFromFilename } from "@/lib/phone";
+import { getAppBaseUrl } from "@/lib/base-url";
 
 // Gemini's inline audio limit is ~20MB request size. We give a small buffer.
 const MAX_BYTES = 20 * 1024 * 1024;
@@ -83,6 +84,9 @@ export async function uploadOneCall(formData: FormData): Promise<UploadResult> {
 // Kick off the serial worker (idempotent — if it's already running, the
 // claim RPC returns no rows and it exits cleanly).
 export async function kickWorker(): Promise<void> {
-  const base = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-  fetch(`${base}/api/process/next`, { method: "POST" }).catch(() => {});
+  const base = getAppBaseUrl();
+  // Don't await — fire-and-forget so the upload form doesn't hang on it.
+  fetch(`${base}/api/process/next`, { method: "POST" }).catch((e) => {
+    console.error("[kickWorker] failed:", e);
+  });
 }

@@ -18,8 +18,17 @@ export async function deleteCall(id: string): Promise<{ error?: string }> {
 		await sb.storage.from("call-audio").remove([row.audio_path]);
 	}
 
-	const { error } = await sb.from("calls").delete().eq("id", id);
+	// `select()` after delete returns the deleted rows. If the array is
+	// empty, the row wasn't deleted — usually an RLS policy mismatch.
+	const { data: deleted, error } = await sb
+		.from("calls")
+		.delete()
+		.eq("id", id)
+		.select("id");
 	if (error) return { error: error.message };
+	if (!deleted || deleted.length === 0) {
+		return { error: "حذف ناموفق بود (دسترسی ندارید یا قبلاً حذف شده است)" };
+	}
 
 	revalidatePath("/dashboard");
 	return {};
