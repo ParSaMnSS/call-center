@@ -49,6 +49,7 @@ export async function uploadOneCall(formData: FormData): Promise<UploadResult> {
       audio_path: "pending",
       status: "pending",
       caller_phone: phoneHint, // Best guess until AI confirms/overrides
+      original_filename: file.name,
     })
     .select("id")
     .single();
@@ -72,14 +73,16 @@ export async function uploadOneCall(formData: FormData): Promise<UploadResult> {
 
   await supabase.from("calls").update({ audio_path: path }).eq("id", row.id);
 
-  // Fire-and-forget processor. Pass the original filename so Gemini can use
-  // the embedded phone number when the call audio doesn't say it aloud.
-  const base = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-  fetch(`${base}/api/process/${row.id}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ filename: file.name }),
-  }).catch(() => {});
-
+  // Note: we do NOT fire the processor here anymore. The serial worker at
+  // /api/process/next picks up pending rows one at a time. The upload form
+  // calls /next once after the batch is uploaded, and the worker chains
+  // through the queue itself.
   return { ok: true, id: row.id, filename: fname };
+}
+
+// Kick off the serial worker (idempotent — if it's already running, the
+// claim RPC returns no rows and it exits cleanly).
+export async function kickWorker(): Promise<void> {
+  const base = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+  fetch(`${base}/api/process/next`, { method: "POST" }).catch(() => {});
 }

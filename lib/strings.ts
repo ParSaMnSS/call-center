@@ -112,6 +112,16 @@ export const t = {
   statusDone: "آماده",
   statusFailed: "ناموفق",
 
+  // Queue / progress
+  queuePosition: (pos: number, total: number) =>
+    `${pos.toLocaleString("fa-IR")} از ${total.toLocaleString("fa-IR")} در صف`,
+  elapsed: "زمان سپری‌شده",
+  eta: "زمان تخمینی",
+  etaUnknown: "نامشخص",
+  processingHint: "در حال تحلیل توسط هوش مصنوعی — این صفحه به‌صورت زنده به‌روز می‌شود.",
+  queuedHint: "این تماس در صف انتظار است و به‌محض آزاد شدن نوبت، تحلیل آغاز می‌شود.",
+  basedOnRecent: "بر اساس میانگین تماس‌های اخیر",
+
   // Resolved
   resolvedYes: "بله",
   resolvedNo: "خیر",
@@ -211,4 +221,14 @@ export function formatFaPercent(fraction: number, opts: { signed?: boolean } = {
   const sign = opts.signed && fraction > 0 ? "+" : "";
   const pct = Math.round(fraction * 100);
   return `${sign}${pct.toLocaleString("fa-IR")}٪`;
+}
+
+// "۰:۲۳" or "۱:۰۵" for elapsed/ETA timers. Caps display at 99:59 for sanity.
+export function formatFaDuration(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  const m = Math.min(99, Math.floor(s / 60));
+  const sec = s % 60;
+  const mFa = m.toLocaleString("fa-IR");
+  const secFa = sec.toString().padStart(2, "0").replace(/\d/g, (d) => "۰۱۲۳۴۵۶۷۸۹"[Number(d)]);
+  return `${mFa}:${secFa}`;
 }

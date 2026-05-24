@@ -8,8 +8,10 @@ import { StatusBadge } from "@/components/status-badge";
 import { SentimentDot } from "@/components/sentiment-dot";
 import { formatFaDate, resolvedLabel, t } from "@/lib/strings";
 import { deleteCall } from "@/lib/actions";
+import { kickWorker } from "@/app/dashboard/upload/actions";
 import { useToast } from "@/components/toast";
 import { useConfirm } from "@/components/confirm-dialog";
+import { QueueInfo, medianProcessingSeconds } from "@/components/queue-info";
 
 type ResolvedFilter = "all" | "yes" | "no";
 type SentimentFilter = "all" | Sentiment;
@@ -26,6 +28,16 @@ export function CallsView({ initial }: { initial: Call[] }) {
   const [from, setFrom] = useState<string>("");
   const [to, setTo] = useState<string>("");
   const [showFilters, setShowFilters] = useState(false);
+
+  // Auto-kick the serial worker if there's anything pending — handles the
+  // case where the user closes the upload page before the worker fires,
+  // or a previous deploy left pending rows orphaned.
+  useEffect(() => {
+    const hasPending = calls.some((c) => c.status === "pending");
+    if (hasPending) kickWorker();
+    // Only run once on mount; the worker chains itself after that.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Realtime subscription
   useEffect(() => {
@@ -106,6 +118,8 @@ export function CallsView({ initial }: { initial: Call[] }) {
   }
 
   const anyFilter = !!(search || agent || category || from || to || resolvedF !== "all" || sentF !== "all");
+
+  const medianSec = useMemo(() => medianProcessingSeconds(calls), [calls]);
 
   return (
     <div className="space-y-4">
@@ -214,6 +228,8 @@ export function CallsView({ initial }: { initial: Call[] }) {
                     <CallRow
                       key={c.id}
                       call={c}
+                      allCalls={calls}
+                      medianSec={medianSec}
                       onDeleted={(id) => setCalls((prev) => prev.filter((x) => x.id !== id))}
                     />
                   ))}
@@ -228,6 +244,8 @@ export function CallsView({ initial }: { initial: Call[] }) {
               <CallCard
                 key={c.id}
                 call={c}
+                allCalls={calls}
+                medianSec={medianSec}
                 onDeleted={(id) => setCalls((prev) => prev.filter((x) => x.id !== id))}
               />
             ))}
@@ -309,7 +327,15 @@ function DeleteButton({ id, onDeleted, size = "sm" }: { id: string; onDeleted: (
   );
 }
 
-function CallRow({ call: c, onDeleted }: { call: Call; onDeleted: (id: string) => void }) {
+function CallRow({
+  call: c, allCalls, medianSec, onDeleted,
+}: {
+  call: Call;
+  allCalls: Call[];
+  medianSec: number | null;
+  onDeleted: (id: string) => void;
+}) {
+  const showQueue = c.status === "pending" || c.status === "analyzing" || c.status === "transcribing";
   return (
     <tr>
       <td>
@@ -355,8 +381,11 @@ function CallRow({ call: c, onDeleted }: { call: Call; onDeleted: (id: string) =
         </Link>
       </td>
       <td>
-        <Link href={`/dashboard/calls/${c.id}`} className="block">
+        <Link href={`/dashboard/calls/${c.id}`} className="block space-y-1">
           <StatusBadge status={c.status} />
+          {showQueue && (
+            <QueueInfo call={c} allCalls={allCalls} medianSec={medianSec} variant="compact" />
+          )}
         </Link>
       </td>
       <td className="text-left whitespace-nowrap">
@@ -366,15 +395,28 @@ function CallRow({ call: c, onDeleted }: { call: Call; onDeleted: (id: string) =
   );
 }
 
-function CallCard({ call: c, onDeleted }: { call: Call; onDeleted: (id: string) => void }) {
+function CallCard({
+  call: c, allCalls, medianSec, onDeleted,
+}: {
+  call: Call;
+  allCalls: Call[];
+  medianSec: number | null;
+  onDeleted: (id: string) => void;
+}) {
+  const showQueue = c.status === "pending" || c.status === "analyzing" || c.status === "transcribing";
   return (
     <Link href={`/dashboard/calls/${c.id}`} className="block panel p-4 active:bg-panel2/60 transition">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 text-xs text-muted fa-nums">
+          <div className="flex items-center gap-2 text-xs text-muted fa-nums flex-wrap">
             <span>{formatFaDate(c.created_at)}</span>
             <StatusBadge status={c.status} />
           </div>
+          {showQueue && (
+            <div className="mt-2">
+              <QueueInfo call={c} allCalls={allCalls} medianSec={medianSec} variant="compact" />
+            </div>
+          )}
           <div className="mt-2 font-semibold text-sm">
             {c.caller_name || <span className="text-muted">{t.unknown}</span>}
             {c.caller_phone && (

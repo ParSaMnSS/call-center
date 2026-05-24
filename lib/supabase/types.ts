@@ -8,6 +8,9 @@ export interface Call {
   audio_path: string;
   audio_duration_sec: number | null;
   status: CallStatus;
+  processing_started_at: string | null;
+  processing_seconds: number | null;
+  original_filename: string | null;
   error_message: string | null;
   transcript: string | null;
   caller_name: string | null;

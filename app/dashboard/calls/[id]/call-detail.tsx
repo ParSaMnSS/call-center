@@ -10,19 +10,24 @@ import { useToast } from "@/components/toast";
 import { useConfirm } from "@/components/confirm-dialog";
 import { formatFaDate, resolvedLabel, t } from "@/lib/strings";
 import { cancelCall, deleteCall } from "@/lib/actions";
+import { QueueInfo, medianProcessingSeconds } from "@/components/queue-info";
 
 export function CallDetail({ initial, audioUrl }: { initial: Call; audioUrl: string | null }) {
   const router = useRouter();
   const toast = useToast();
   const confirm = useConfirm();
   const [call, setCall] = useState<Call>(initial);
+  // Other in-flight + recently-done calls, used by QueueInfo for position + median ETA.
+  const [queueCalls, setQueueCalls] = useState<Call[]>([initial]);
   const [reprocessing, startReprocess] = useTransition();
   const [cancelling, startCancel] = useTransition();
   const [deleting, startDelete] = useTransition();
 
   useEffect(() => {
     const sb = createClient();
-    const channel = sb
+
+    // Watch THIS call for live updates.
+    const callChannel = sb
       .channel(`call-${call.id}`)
       .on(
         "postgres_changes",
@@ -30,8 +35,38 @@ export function CallDetail({ initial, audioUrl }: { initial: Call; audioUrl: str
         (payload) => { setCall((prev) => ({ ...prev, ...(payload.new as Call) })); }
       )
       .subscribe();
-    return () => { sb.removeChannel(channel); };
+
+    // Fetch queue context (pending + processing + recent done) — enough for
+    // QueueInfo to compute position and median ETA. Refresh on any change.
+    async function refreshQueue() {
+      const { data } = await sb
+        .from("calls")
+        .select("*")
+        .or("status.eq.pending,status.eq.analyzing,status.eq.transcribing,status.eq.done")
+        .order("created_at", { ascending: false })
+        .limit(100);
+      if (data) setQueueCalls(data as Call[]);
+    }
+    refreshQueue();
+
+    const queueChannel = sb
+      .channel("call-detail-queue")
+      .on("postgres_changes", { event: "*", schema: "public", table: "calls" }, () => {
+        refreshQueue();
+      })
+      .subscribe();
+
+    return () => {
+      sb.removeChannel(callChannel);
+      sb.removeChannel(queueChannel);
+    };
   }, [call.id]);
+
+  const medianSec = medianProcessingSeconds(queueCalls);
+  // Make sure THIS call is in queueCalls so position math works even before refresh lands.
+  const mergedQueue = queueCalls.some((c) => c.id === call.id)
+    ? queueCalls.map((c) => (c.id === call.id ? call : c))
+    : [...queueCalls, call];
 
   function reprocess() {
     startReprocess(async () => {
@@ -116,13 +151,13 @@ export function CallDetail({ initial, audioUrl }: { initial: Call; audioUrl: str
         )}
 
         {isProcessing && (
-          <div className="mt-4">
-            <div className="h-1 w-full bg-panel2 rounded overflow-hidden">
-              <div className="h-full w-1/2 bg-gradient-to-r from-accent to-accent2 animate-pulse" />
-            </div>
-            <div className="text-xs text-muted mt-2 leading-6">
-              ممکن است چند دقیقه طول بکشد. به‌روزرسانی به‌صورت زنده انجام می‌شود.
-            </div>
+          <div className="mt-4 space-y-3">
+            {call.status !== "pending" && (
+              <div className="h-1 w-full bg-panel2 rounded overflow-hidden">
+                <div className="h-full w-1/2 bg-gradient-to-r from-accent to-accent2 animate-pulse" />
+              </div>
+            )}
+            <QueueInfo call={call} allCalls={mergedQueue} medianSec={medianSec} variant="full" />
           </div>
         )}
       </div>
