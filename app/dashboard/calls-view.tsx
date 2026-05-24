@@ -12,6 +12,7 @@ import { kickWorker } from "@/app/dashboard/upload/actions";
 import { useToast } from "@/components/toast";
 import { useConfirm } from "@/components/confirm-dialog";
 import { QueueInfo, medianProcessingSeconds } from "@/components/queue-info";
+import { Trash2, Loader2 } from "lucide-react";
 
 type ResolvedFilter = "all" | "yes" | "no";
 type SentimentFilter = "all" | Sentiment;
@@ -317,12 +318,15 @@ function DeleteButton({ id, onDeleted, size = "sm" }: { id: string; onDeleted: (
       onClick={handle}
       disabled={pending}
       title={t.delete}
+      aria-label={t.delete}
       className={
-        "btn btn-ghost text-danger hover:bg-danger/10 " +
-        (size === "sm" ? "text-xs px-2 py-1" : "text-sm")
+        "btn btn-ghost text-danger hover:bg-danger/10 inline-flex items-center justify-center " +
+        (size === "sm" ? "px-2 py-1.5" : "px-2.5 py-1.5")
       }
     >
-      {pending ? "…" : "🗑"}
+      {pending
+        ? <Loader2 className="w-4 h-4 animate-spin" />
+        : <Trash2 className="w-4 h-4" />}
     </button>
   );
 }

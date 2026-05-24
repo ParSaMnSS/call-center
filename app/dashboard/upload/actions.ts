@@ -1,6 +1,5 @@
 "use server";
 
-import { after } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { extractPhoneFromFilename } from "@/lib/phone";
 import { getAppBaseUrl } from "@/lib/base-url";
@@ -75,18 +74,16 @@ export async function uploadOneCall(formData: FormData): Promise<UploadResult> {
 
   await supabase.from("calls").update({ audio_path: path }).eq("id", row.id);
 
-  // Kick the serial worker. Using `after()` defers the request until the
-  // response is sent but keeps the function alive long enough for the
-  // fetch to actually go out — avoids the race where the action returns,
-  // the user navigates away, and the in-flight kick gets aborted.
+  // Kick the worker. The worker route claims a row + returns immediately
+  // (~100ms), then processes in the background via after(). Awaiting here
+  // is cheap and guarantees the kick actually reaches the server before
+  // this action returns.
   const base = getAppBaseUrl();
-  after(async () => {
-    try {
-      await fetch(`${base}/api/process/next`, { method: "POST" });
-    } catch (e) {
-      console.error("[uploadOneCall] worker kick failed:", e);
-    }
-  });
+  try {
+    await fetch(`${base}/api/process/next`, { method: "POST" });
+  } catch (e) {
+    console.error("[uploadOneCall] worker kick failed:", e);
+  }
 
   return { ok: true, id: row.id, filename: fname };
 }
@@ -95,8 +92,9 @@ export async function uploadOneCall(formData: FormData): Promise<UploadResult> {
 // claim RPC returns no rows and it exits cleanly).
 export async function kickWorker(): Promise<void> {
   const base = getAppBaseUrl();
-  // Don't await — fire-and-forget so the upload form doesn't hang on it.
-  fetch(`${base}/api/process/next`, { method: "POST" }).catch((e) => {
+  try {
+    await fetch(`${base}/api/process/next`, { method: "POST" });
+  } catch (e) {
     console.error("[kickWorker] failed:", e);
-  });
+  }
 }
