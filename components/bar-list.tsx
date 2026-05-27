@@ -6,19 +6,20 @@ type Item = {
 
 type Props = {
   items: Item[];
-  // Optional palette: tint bars by index. Default is a single accent color.
+  // Optional palette: tint bars by category. Default is solid black.
   tone?: "accent" | "sentiment" | "resolution";
   // Show the bar background as a track for empty/zero values.
   emptyMessage?: string;
 };
 
-const SENTIMENT_TONES = ["bg-success/70", "bg-warn/70", "bg-danger/70"];
-const RESOLUTION_TONES = ["bg-success/70", "bg-danger/70", "bg-muted/60"];
+// Semantic palettes (lightened for the new light theme)
+const SENTIMENT_TONES = ["bg-green-500", "bg-amber-500", "bg-red-500"];
+const RESOLUTION_TONES = ["bg-green-500", "bg-red-500", "bg-zinc-400"];
 
 function toneFor(tone: Props["tone"], i: number): string {
-  if (tone === "sentiment") return SENTIMENT_TONES[i] ?? "bg-accent/60";
-  if (tone === "resolution") return RESOLUTION_TONES[i] ?? "bg-accent/60";
-  return "bg-accent/60";
+  if (tone === "sentiment") return SENTIMENT_TONES[i] ?? "bg-fg";
+  if (tone === "resolution") return RESOLUTION_TONES[i] ?? "bg-fg";
+  return "bg-fg";
 }
 
 export function BarList({ items, tone = "accent", emptyMessage }: Props) {
@@ -39,15 +40,15 @@ export function BarList({ items, tone = "accent", emptyMessage }: Props) {
         return (
           <li key={`${it.label}-${i}`} className="text-sm">
             <div className="flex items-center justify-between gap-2 mb-1">
-              <span className="truncate min-w-0">{it.label}</span>
+              <span className="truncate min-w-0 text-fg">{it.label}</span>
               <span className="text-xs text-muted shrink-0 fa-nums flex items-center gap-2">
                 {it.secondary && <span>{it.secondary}</span>}
-                <span className="text-text font-medium">{it.value.toLocaleString("fa-IR")}</span>
+                <span className="text-fg font-medium">{it.value.toLocaleString("fa-IR")}</span>
               </span>
             </div>
-            <div className="h-1.5 rounded-full bg-panel2 overflow-hidden">
+            <div className="h-1.5 rounded-full bg-surface2 overflow-hidden">
               <div
-                className={`h-full ${toneFor(tone, i)} rounded-full transition-all`}
+                className={`h-full ${toneFor(tone, i)} rounded-full transition-all duration-500`}
                 style={{ width: `${pct}%` }}
               />
             </div>

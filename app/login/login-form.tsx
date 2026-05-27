@@ -54,7 +54,7 @@ export function LoginForm() {
         />
       </div>
       {error && (
-        <div className="text-danger text-sm bg-danger/10 border border-danger/30 rounded-lg px-3 py-2">
+        <div className="text-sm bg-red-50 border border-red-200 text-red-800 rounded-lg px-3 py-2">
           {error}
         </div>
       )}

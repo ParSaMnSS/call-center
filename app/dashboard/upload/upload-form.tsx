@@ -6,6 +6,8 @@ import { uploadOneCall } from "./actions";
 import { useToast } from "@/components/toast";
 import { extractPhoneFromFilename } from "@/lib/phone";
 import { t } from "@/lib/strings";
+import { AnimatePresence, motion } from "framer-motion";
+import { Upload, Music, X, Loader2, CheckCircle2, XCircle } from "lucide-react";
 
 const MAX_BYTES = 20 * 1024 * 1024;
 
@@ -112,17 +114,17 @@ export function UploadForm() {
         }}
         onClick={() => inputRef.current?.click()}
         className={
-          "cursor-pointer rounded-xl2 border-2 border-dashed py-8 px-6 text-center transition " +
+          "cursor-pointer rounded-xl border-2 border-dashed py-10 px-6 text-center transition-colors bg-surface " +
           (dragging
-            ? "border-accent bg-accent/5"
-            : "border-border hover:border-accent/60 hover:bg-panel2/30")
+            ? "border-fg bg-surface2"
+            : "border-borderStrong hover:border-fg")
         }
       >
-        <div className="mx-auto h-10 w-10 rounded-full bg-panel2 flex items-center justify-center mb-2 text-lg">
-          ⬆
+        <div className="mx-auto h-11 w-11 rounded-full bg-surface2 flex items-center justify-center mb-3">
+          <Upload className="w-5 h-5 text-fg" />
         </div>
-        <div className="text-sm">{t.dropHere}</div>
-        <div className="text-xs text-muted mt-1">{t.uploadHint}</div>
+        <div className="text-sm font-medium text-fg">{t.dropHere}</div>
+        <div className="text-xs text-muted mt-1.5">{t.uploadHint}</div>
         <div className="text-xs text-muted">{t.uploadHintMulti}</div>
         <input
           ref={inputRef}
@@ -150,31 +152,41 @@ export function UploadForm() {
             </button>
           </div>
           <ul>
-            {items.map((it) => (
-              <li key={it.key} className="px-4 py-3 flex items-center gap-3">
-                <FileIcon />
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm truncate">{it.file.name}</div>
-                  <div className="text-xs text-muted fa-nums mt-0.5 flex items-center gap-2 flex-wrap">
-                    <span>{(it.file.size / (1024 * 1024)).toLocaleString("fa-IR", { maximumFractionDigits: 2 })} مگابایت</span>
-                    {it.phone && (
-                      <span className="badge badge-info" dir="ltr">{it.phone}</span>
-                    )}
+            <AnimatePresence initial={false}>
+              {items.map((it) => (
+                <motion.li
+                  key={it.key}
+                  layout
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, x: -10 }}
+                  transition={{ duration: 0.18, ease: [0.22, 0.61, 0.36, 1] }}
+                  className="px-4 py-3 flex items-center gap-3 border-b border-border last:border-b-0"
+                >
+                  <FileIcon />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm truncate text-fg">{it.file.name}</div>
+                    <div className="text-xs text-muted fa-nums mt-0.5 flex items-center gap-2 flex-wrap">
+                      <span>{(it.file.size / (1024 * 1024)).toLocaleString("fa-IR", { maximumFractionDigits: 2 })} مگابایت</span>
+                      {it.phone && (
+                        <span className="badge" dir="ltr">{it.phone}</span>
+                      )}
+                    </div>
                   </div>
-                </div>
-                <ItemStatus item={it} />
-                {it.status !== "uploading" && (
-                  <button
-                    onClick={() => remove(it.key)}
-                    disabled={uploading}
-                    className="btn btn-ghost text-muted text-xs px-2"
-                    aria-label="حذف"
-                  >
-                    ✕
-                  </button>
-                )}
-              </li>
-            ))}
+                  <ItemStatus item={it} />
+                  {it.status !== "uploading" && (
+                    <button
+                      onClick={() => remove(it.key)}
+                      disabled={uploading}
+                      className="btn btn-ghost text-muted px-2"
+                      aria-label="حذف"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </motion.li>
+              ))}
+            </AnimatePresence>
           </ul>
         </div>
       )}
@@ -202,8 +214,8 @@ export function UploadForm() {
 
 function FileIcon() {
   return (
-    <div className="h-9 w-9 shrink-0 rounded-lg bg-panel2 flex items-center justify-center text-muted">
-      ♪
+    <div className="h-9 w-9 shrink-0 rounded-lg bg-surface2 flex items-center justify-center text-muted">
+      <Music className="w-4 h-4" />
     </div>
   );
 }
@@ -211,18 +223,28 @@ function FileIcon() {
 function ItemStatus({ item }: { item: Item }) {
   if (item.status === "queued") {
     if (item.error) return <span className="badge badge-danger text-xs whitespace-nowrap">{item.error}</span>;
-    return <span className="badge badge-muted text-xs">{t.status_queued}</span>;
+    return <span className="badge text-xs">{t.status_queued}</span>;
   }
   if (item.status === "uploading") {
     return (
-      <span className="badge badge-info text-xs inline-flex items-center gap-1.5">
-        <span className="inline-block h-1.5 w-1.5 rounded-full bg-current animate-pulse" />
+      <span className="badge text-xs inline-flex items-center gap-1.5">
+        <Loader2 className="w-3 h-3 animate-spin" />
         {t.status_uploading}
       </span>
     );
   }
   if (item.status === "done") {
-    return <span className="badge badge-success text-xs">✓ {t.status_done}</span>;
+    return (
+      <span className="badge badge-success text-xs inline-flex items-center gap-1">
+        <CheckCircle2 className="w-3 h-3" />
+        {t.status_done}
+      </span>
+    );
   }
-  return <span className="badge badge-danger text-xs">{item.error || t.status_error}</span>;
+  return (
+    <span className="badge badge-danger text-xs inline-flex items-center gap-1">
+      <XCircle className="w-3 h-3" />
+      {item.error || t.status_error}
+    </span>
+  );
 }

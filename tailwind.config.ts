@@ -9,26 +9,37 @@ const config: Config = {
   theme: {
     extend: {
       fontFamily: {
-        sans: ["var(--font-vazirmatn)", "system-ui", "sans-serif"],
+        sans: ["var(--font-vazirmatn)", "var(--font-inter)", "system-ui", "sans-serif"],
+        latin: ["var(--font-inter)", "system-ui", "sans-serif"],
       },
       colors: {
-        bg: "#0b0f17",
-        panel: "#121826",
-        panel2: "#1a2233",
-        border: "#252d3f",
-        text: "#e7ecf3",
-        muted: "#8a94a6",
-        accent: "#6ea8ff",
-        accent2: "#9b8cff",
-        success: "#3ddc97",
-        warn: "#ffb454",
-        danger: "#ff5d6c",
+        bg: "#fafafa",
+        surface: "#ffffff",
+        surface2: "#f4f4f5",
+        border: "#e4e4e7",
+        borderStrong: "#d4d4d8",
+        fg: "#0a0a0a",
+        muted: "#71717a",
+        subtle: "#a1a1aa",
+        // Legacy aliases so older class references keep compiling. Map to new palette.
+        panel: "#ffffff",
+        panel2: "#f4f4f5",
+        text: "#0a0a0a",
+        accent: "#0a0a0a",
+        accent2: "#262626",
+        success: "#16a34a",
+        warn: "#d97706",
+        danger: "#dc2626",
+        info: "#525252",
       },
       boxShadow: {
-        soft: "0 1px 2px rgba(0,0,0,0.2), 0 8px 24px rgba(0,0,0,0.25)",
+        flat: "0 1px 2px rgb(0 0 0 / 0.04)",
+        // Keep legacy `soft` reference compiling but as a flat shadow.
+        soft: "0 1px 2px rgb(0 0 0 / 0.04)",
       },
       borderRadius: {
-        xl2: "14px",
+        // Legacy alias.
+        xl2: "12px",
       },
     },
   },

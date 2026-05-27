@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ArrowRight } from "lucide-react";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import type { Call } from "@/lib/supabase/types";
@@ -35,8 +36,9 @@ export default async function CallDetailPage({
   return (
     <div>
       <div className="mb-4">
-        <Link href="/dashboard" className="text-sm text-muted hover:text-text">
-          ← {t.back}
+        <Link href="/dashboard" className="text-sm text-muted hover:text-fg inline-flex items-center gap-1.5 transition-colors">
+          <ArrowRight className="w-4 h-4" />
+          {t.back}
         </Link>
       </div>
       <CallDetail initial={call as Call} audioUrl={audioUrl} />

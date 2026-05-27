@@ -49,17 +49,11 @@ export default async function SummaryPage({
 
   return (
     <div>
-      <div className="mb-5">
-        <h1 className="text-xl md:text-2xl font-bold">{t.summaryTitle}</h1>
-        <p className="text-muted text-xs md:text-sm mt-1">{t.summarySubtitle}</p>
-      </div>
-
       {error && (
-        <div className="text-danger text-sm bg-danger/10 border border-danger/30 rounded-lg px-3 py-2 mb-4">
+        <div className="text-sm bg-red-50 border border-red-200 text-red-800 rounded-lg px-3 py-2 mb-4">
           {error.message}
         </div>
       )}
-
       <SummaryView result={result} />
     </div>
   );

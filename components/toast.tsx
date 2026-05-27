@@ -1,6 +1,8 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { CheckCircle2, XCircle, Info } from "lucide-react";
 
 type Toast = {
   id: number;
@@ -31,37 +33,45 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     <ToastContext.Provider value={{ show }}>
       {children}
       <div className="fixed bottom-4 left-4 z-50 flex flex-col gap-2 pointer-events-none">
-        {toasts.map((t) => (
-          <ToastView key={t.id} toast={t} onClose={() => setToasts((p) => p.filter((x) => x.id !== t.id))} />
-        ))}
+        <AnimatePresence initial={false}>
+          {toasts.map((t) => (
+            <ToastView
+              key={t.id}
+              toast={t}
+              onClose={() => setToasts((p) => p.filter((x) => x.id !== t.id))}
+            />
+          ))}
+        </AnimatePresence>
       </div>
     </ToastContext.Provider>
   );
 }
 
 function ToastView({ toast, onClose }: { toast: Toast; onClose: () => void }) {
-  const [enter, setEnter] = useState(false);
-  useEffect(() => {
-    const r = requestAnimationFrame(() => setEnter(true));
-    return () => cancelAnimationFrame(r);
-  }, []);
-
-  const color =
-    toast.kind === "success" ? "border-success/40 bg-success/10 text-success" :
-    toast.kind === "error"   ? "border-danger/40 bg-danger/10 text-danger"   :
-                                "border-accent/40 bg-accent/10 text-accent";
+  const accent =
+    toast.kind === "success" ? "border-l-green-500" :
+    toast.kind === "error"   ? "border-l-red-500"   :
+                                "border-l-zinc-900";
+  const Icon =
+    toast.kind === "success" ? CheckCircle2 :
+    toast.kind === "error"   ? XCircle      : Info;
+  const iconColor =
+    toast.kind === "success" ? "text-green-600" :
+    toast.kind === "error"   ? "text-red-600"   : "text-zinc-700";
 
   return (
-    <div
+    <motion.div
       onClick={onClose}
-      style={{
-        transform: enter ? "translateY(0)" : "translateY(10px)",
-        opacity: enter ? 1 : 0,
-      }}
-      className={`pointer-events-auto cursor-pointer min-w-[260px] max-w-[420px] rounded-xl border ${color} backdrop-blur-md px-4 py-3 shadow-soft transition-all duration-200 text-sm`}
+      role="status"
+      initial={{ opacity: 0, y: 10, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, x: -20 }}
+      transition={{ duration: 0.18, ease: [0.22, 0.61, 0.36, 1] }}
+      className={`pointer-events-auto cursor-pointer min-w-[280px] max-w-[420px] rounded-xl border border-border border-l-4 ${accent} bg-surface px-4 py-3 shadow-flat text-sm text-fg flex items-start gap-2.5`}
     >
-      {toast.message}
-    </div>
+      <Icon className={`w-4 h-4 mt-0.5 shrink-0 ${iconColor}`} />
+      <span className="leading-6">{toast.message}</span>
+    </motion.div>
   );
 }
 

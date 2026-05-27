@@ -6,6 +6,8 @@ import { useTransition } from "react";
 import type { Range, SummaryResult, Kpi } from "@/lib/summary";
 import { StatCard } from "@/components/stat-card";
 import { BarList } from "@/components/bar-list";
+import { FadeIn } from "@/components/motion";
+import { Mic } from "lucide-react";
 import { formatFaDateShort, formatFaDayMonth, formatFaPercent, t } from "@/lib/strings";
 
 const RANGE_LABELS: Record<Range, string> = {
@@ -44,7 +46,12 @@ export function SummaryView({ result }: { result: SummaryResult }) {
         } as const);
 
   return (
-    <div className={"space-y-5 transition-opacity " + (pending ? "opacity-60" : "")}>
+    <FadeIn className={"space-y-5 transition-opacity " + (pending ? "opacity-60" : "")}>
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight text-fg">{t.summaryTitle}</h1>
+        <p className="text-sm text-muted mt-1">{t.summarySubtitle}</p>
+      </div>
+
       {/* Range selector */}
       <div className="panel p-3 md:p-4 flex items-center justify-between gap-3 flex-wrap">
         <div className="text-xs md:text-sm text-muted fa-nums">
@@ -52,9 +59,9 @@ export function SummaryView({ result }: { result: SummaryResult }) {
             ? "تمام بازه‌ها"
             : `${formatFaDateShort(result.current.from)} — ${formatFaDateShort(result.current.to)}`}
           {" · "}
-          <span className="text-text">{totalCallsValue} تماس</span>
+          <span className="text-fg font-medium">{totalCallsValue} تماس</span>
         </div>
-        <div className="inline-flex rounded-lg border border-border bg-panel2/60 p-1">
+        <div className="inline-flex rounded-lg border border-border bg-surface2 p-1">
           {(["today", "7d", "30d", "all"] as Range[]).map((r) => {
             const active = result.range === r;
             return (
@@ -63,10 +70,10 @@ export function SummaryView({ result }: { result: SummaryResult }) {
                 onClick={() => setRange(r)}
                 disabled={pending}
                 className={
-                  "px-3 py-1.5 rounded-md text-xs md:text-sm transition " +
+                  "px-3 py-1.5 rounded-md text-xs md:text-sm transition-colors " +
                   (active
-                    ? "bg-panel text-text shadow-soft"
-                    : "text-muted hover:text-text")
+                    ? "bg-surface text-fg font-medium shadow-flat"
+                    : "text-muted hover:text-fg")
                 }
               >
                 {RANGE_LABELS[r]}
@@ -79,8 +86,10 @@ export function SummaryView({ result }: { result: SummaryResult }) {
       {/* Empty state */}
       {result.totalCalls.value === 0 && result.inFlightCount === 0 ? (
         <div className="panel p-12 text-center">
-          <div className="mx-auto h-14 w-14 rounded-full bg-panel2 flex items-center justify-center text-2xl mb-3">♪</div>
-          <div className="font-semibold mb-1">{t.noCallsInRange}</div>
+          <div className="mx-auto h-14 w-14 rounded-full bg-surface2 flex items-center justify-center mb-4">
+            <Mic className="w-6 h-6 text-muted" />
+          </div>
+          <div className="font-semibold text-fg mb-1">{t.noCallsInRange}</div>
           <div className="text-sm text-muted mb-5">برای شروع، یک فایل صوتی بارگذاری کنید.</div>
           <Link href="/dashboard/upload" className="btn btn-primary inline-flex">+ {t.newUpload}</Link>
         </div>
@@ -113,8 +122,8 @@ export function SummaryView({ result }: { result: SummaryResult }) {
 
           {/* Daily trend */}
           <div className="panel p-4 md:p-5">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-semibold text-muted">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xs font-semibold text-muted uppercase tracking-wide">
                 {result.range === "all" ? t.monthlyTrend : t.dailyTrend}
               </h2>
             </div>
@@ -140,12 +149,12 @@ export function SummaryView({ result }: { result: SummaryResult }) {
           {/* Top tags */}
           {result.topTags.length > 0 && (
             <div className="panel p-4 md:p-5">
-              <h2 className="text-sm font-semibold text-muted mb-3">{t.topTags}</h2>
+              <h2 className="text-xs font-semibold text-muted mb-3 uppercase tracking-wide">{t.topTags}</h2>
               <div className="flex flex-wrap gap-2">
                 {result.topTags.map((tag) => (
-                  <span key={tag.label} className="badge badge-info">
+                  <span key={tag.label} className="badge">
                     {tag.label}
-                    <span className="ms-1 text-[10px] opacity-80 fa-nums">{tag.value.toLocaleString("fa-IR")}</span>
+                    <span className="ms-1 text-[10px] text-muted fa-nums">{tag.value.toLocaleString("fa-IR")}</span>
                   </span>
                 ))}
               </div>
@@ -153,14 +162,14 @@ export function SummaryView({ result }: { result: SummaryResult }) {
           )}
         </>
       )}
-    </div>
+    </FadeIn>
   );
 }
 
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="panel p-4 md:p-5">
-      <h2 className="text-sm font-semibold text-muted mb-4">{title}</h2>
+      <h2 className="text-xs font-semibold text-muted mb-4 uppercase tracking-wide">{title}</h2>
       {children}
     </div>
   );
@@ -205,8 +214,8 @@ function TrendChart({ result }: { result: SummaryResult }) {
             >
               <div
                 className={
-                  "rounded-t-sm transition-all " +
-                  (d.count > 0 ? "bg-gradient-to-t from-accent to-accent2" : "bg-panel2")
+                  "rounded-t-sm transition-all duration-300 " +
+                  (d.count > 0 ? "bg-fg" : "bg-surface2")
                 }
                 style={{ height: `${Math.max(pct, d.count > 0 ? 4 : 2)}%` }}
               />

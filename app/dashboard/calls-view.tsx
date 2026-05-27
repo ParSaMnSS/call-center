@@ -13,7 +13,8 @@ import { useToast } from "@/components/toast";
 import { useConfirm } from "@/components/confirm-dialog";
 import { QueueInfo, medianProcessingSeconds } from "@/components/queue-info";
 import { formatFaDuration } from "@/lib/strings";
-import { Trash2, Loader2, Play, StopCircle, AlertTriangle } from "lucide-react";
+import { FadeIn, motion } from "@/components/motion";
+import { Trash2, Loader2, Play, StopCircle, AlertTriangle, Mic, Search, SlidersHorizontal } from "lucide-react";
 
 type ResolvedFilter = "all" | "yes" | "no";
 type SentimentFilter = "all" | Sentiment;
@@ -137,7 +138,17 @@ export function CallsView({ initial }: { initial: Call[] }) {
   );
 
   return (
-    <div className="space-y-4">
+    <FadeIn className="space-y-4">
+      <div className="flex items-baseline justify-between mb-1">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-fg">{t.dashboardTitle}</h1>
+          <p className="text-sm text-muted mt-1">{t.dashboardSubtitle}</p>
+        </div>
+        <Link href="/dashboard/upload" className="btn btn-primary text-sm hidden md:inline-flex">
+          + {t.newUpload}
+        </Link>
+      </div>
+
       {aiBusy && <AIBusyBanner />}
       {(failedCount > 0 || processingCount > 0) && (
         <BulkActionsBar
@@ -152,20 +163,21 @@ export function CallsView({ initial }: { initial: Call[] }) {
           <div className="relative flex-1">
             <input
               type="text"
-              className="input ps-9"
+              className="input ps-10"
               placeholder={t.search}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
-            <span className="absolute inset-y-0 start-0 flex items-center ps-3 text-muted text-sm pointer-events-none">⌕</span>
+            <Search className="absolute inset-y-0 start-3 my-auto w-4 h-4 text-muted pointer-events-none" />
           </div>
           <button
             onClick={() => setShowFilters((v) => !v)}
             className={"btn text-sm whitespace-nowrap " + (showFilters || anyFilter ? "" : "btn-ghost")}
           >
+            <SlidersHorizontal className="w-4 h-4" />
             {t.filters}
             {anyFilter && (
-              <span className="ms-1 inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 rounded-full bg-accent text-bg text-[10px] font-bold fa-nums">
+              <span className="ms-1 inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 rounded-full bg-fg text-white text-[10px] font-bold fa-nums">
                 {[agent, category, from, to].filter(Boolean).length + (resolvedF !== "all" ? 1 : 0) + (sentF !== "all" ? 1 : 0)}
               </span>
             )}
@@ -276,10 +288,10 @@ export function CallsView({ initial }: { initial: Call[] }) {
         </>
       )}
 
-      <div className="text-xs text-muted text-center fa-nums">
+      <div className="text-xs text-muted text-center fa-nums pt-2">
         نمایش {filtered.length.toLocaleString("fa-IR")} از {calls.length.toLocaleString("fa-IR")} تماس
       </div>
-    </div>
+    </FadeIn>
   );
 }
 
@@ -287,8 +299,8 @@ function EmptyState({ hasFilter, totalCount }: { hasFilter: boolean; totalCount:
   if (hasFilter) {
     return (
       <div className="panel p-12 text-center text-muted">
-        <div className="text-3xl mb-2">⌕</div>
-        <div>{t.noCalls}</div>
+        <Search className="w-8 h-8 mx-auto mb-3 text-subtle" />
+        <div className="text-fg font-medium">{t.noCalls}</div>
         <div className="text-xs mt-1">با این فیلترها نتیجه‌ای پیدا نشد.</div>
       </div>
     );
@@ -296,8 +308,10 @@ function EmptyState({ hasFilter, totalCount }: { hasFilter: boolean; totalCount:
   if (totalCount === 0) {
     return (
       <div className="panel p-12 text-center">
-        <div className="mx-auto h-14 w-14 rounded-full bg-panel2 flex items-center justify-center text-2xl mb-3">♪</div>
-        <div className="font-semibold mb-1">هنوز تماسی بارگذاری نشده است</div>
+        <div className="mx-auto h-14 w-14 rounded-full bg-surface2 flex items-center justify-center mb-4">
+          <Mic className="w-6 h-6 text-muted" />
+        </div>
+        <div className="font-semibold text-fg mb-1">هنوز تماسی بارگذاری نشده است</div>
         <div className="text-sm text-muted mb-5">برای شروع، اولین فایل صوتی را بارگذاری کنید.</div>
         <Link href="/dashboard/upload" className="btn btn-primary inline-flex">
           + {t.newUpload}
@@ -445,41 +459,44 @@ function AIBusyBanner() {
   const retryingNow = secondsLeft <= 5;
 
   return (
-    <div
+    <motion.div
       role="status"
       aria-live="polite"
-      className="rounded-xl2 border-2 border-warn/40 bg-warn/10 p-4 md:p-5 flex items-start gap-3 md:gap-4"
+      initial={{ opacity: 0, y: -6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.22, ease: [0.22, 0.61, 0.36, 1] }}
+      className="rounded-xl border border-amber-200 bg-amber-50 p-4 md:p-5 flex items-start gap-3 md:gap-4"
     >
-      <div className="shrink-0 h-10 w-10 rounded-full bg-warn/20 border border-warn/40 flex items-center justify-center">
-        <AlertTriangle className="w-5 h-5 text-warn" />
+      <div className="shrink-0 h-10 w-10 rounded-full bg-amber-100 border border-amber-200 flex items-center justify-center">
+        <AlertTriangle className="w-5 h-5 text-amber-700" />
       </div>
       <div className="min-w-0 flex-1">
-        <div className="font-bold text-base md:text-lg text-warn">
+        <div className="font-semibold text-base md:text-lg text-amber-900">
           {t.aiBusyTitle}
         </div>
-        <div className="text-sm text-fg/80 mt-1 leading-7">
+        <div className="text-sm text-amber-900/80 mt-1 leading-7">
           {t.aiBusyBody}
         </div>
-        <div className="mt-3 inline-flex items-center gap-2 rounded-lg bg-warn/15 border border-warn/30 px-3 py-1.5">
+        <div className="mt-3 inline-flex items-center gap-2 rounded-lg bg-white border border-amber-200 px-3 py-1.5">
           {retryingNow ? (
             <>
-              <Loader2 className="w-4 h-4 text-warn animate-spin" />
-              <span className="text-sm font-semibold text-warn">{t.aiBusyRetryingNow}</span>
+              <Loader2 className="w-4 h-4 text-amber-700 animate-spin" />
+              <span className="text-sm font-semibold text-amber-900">{t.aiBusyRetryingNow}</span>
             </>
           ) : (
             <>
               <span className="relative flex h-2.5 w-2.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-warn opacity-60" />
-                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-warn" />
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-500 opacity-60" />
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-600" />
               </span>
-              <span className="text-sm font-semibold text-warn fa-nums">
+              <span className="text-sm font-semibold text-amber-900 fa-nums">
                 {t.aiBusyNextRetry(formatFaDuration(secondsLeft))}
               </span>
             </>
           )}
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 }
 
@@ -562,7 +579,7 @@ function CallCard({
 }) {
   const showQueue = c.status === "pending" || c.status === "analyzing" || c.status === "transcribing";
   return (
-    <Link href={`/dashboard/calls/${c.id}`} className="block panel p-4 active:bg-panel2/60 transition">
+    <Link href={`/dashboard/calls/${c.id}`} className="block panel p-4 active:bg-surface2 transition-colors">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-xs text-muted fa-nums flex-wrap">

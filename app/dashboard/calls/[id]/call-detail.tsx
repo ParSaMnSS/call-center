@@ -12,6 +12,7 @@ import { formatFaDate, resolvedLabel, t } from "@/lib/strings";
 import { cancelCall, deleteCall } from "@/lib/actions";
 import { kickWorker } from "@/app/dashboard/upload/actions";
 import { QueueInfo, medianProcessingSeconds } from "@/components/queue-info";
+import { FadeIn } from "@/components/motion";
 
 export function CallDetail({ initial, audioUrl }: { initial: Call; audioUrl: string | null }) {
   const router = useRouter();
@@ -122,7 +123,7 @@ export function CallDetail({ initial, audioUrl }: { initial: Call; audioUrl: str
   const isProcessing = call.status === "pending" || call.status === "transcribing" || call.status === "analyzing";
 
   return (
-    <div className="space-y-5">
+    <FadeIn className="space-y-5">
       {/* Header */}
       <div className="panel p-4 md:p-5">
         <div className="flex items-start justify-between flex-wrap gap-3">
@@ -155,17 +156,17 @@ export function CallDetail({ initial, audioUrl }: { initial: Call; audioUrl: str
         </div>
 
         {call.status === "failed" && call.error_message && (
-          <div className="mt-4 text-sm bg-danger/10 border border-danger/30 text-danger rounded-lg px-3 py-2">
+          <div className="mt-4 text-sm bg-red-50 border border-red-200 text-red-900 rounded-lg px-3 py-2.5">
             <div className="font-semibold mb-0.5">{t.errorOccurred}</div>
-            <div className="text-xs opacity-90 break-words">{call.error_message}</div>
+            <div className="text-xs text-red-800/90 break-words">{call.error_message}</div>
           </div>
         )}
 
         {isProcessing && (
           <div className="mt-4 space-y-3">
             {call.status !== "pending" && (
-              <div className="h-1 w-full bg-panel2 rounded overflow-hidden">
-                <div className="h-full w-1/2 bg-gradient-to-r from-accent to-accent2 animate-pulse" />
+              <div className="h-1 w-full bg-surface2 rounded overflow-hidden">
+                <div className="h-full w-1/2 bg-fg animate-pulse" />
               </div>
             )}
             <QueueInfo call={call} allCalls={mergedQueue} medianSec={medianSec} variant="full" />
@@ -201,7 +202,7 @@ export function CallDetail({ initial, audioUrl }: { initial: Call; audioUrl: str
 
             <div>
               <dt className="text-xs text-muted mb-1">{t.issueSummary}</dt>
-              <dd className="bg-panel2/60 rounded-lg p-3 leading-7">
+              <dd className="bg-surface2 border border-border rounded-lg p-3 leading-7 text-fg">
                 {call.issue_summary || <span className="text-muted">{t.unknown}</span>}
               </dd>
             </div>
@@ -258,7 +259,7 @@ export function CallDetail({ initial, audioUrl }: { initial: Call; audioUrl: str
             {call.notes && (
               <div>
                 <dt className="text-xs text-muted mb-1">{t.notes}</dt>
-                <dd className="bg-panel2/60 rounded-lg p-3 leading-7 text-sm">{call.notes}</dd>
+                <dd className="bg-surface2 border border-border rounded-lg p-3 leading-7 text-sm">{call.notes}</dd>
               </div>
             )}
           </dl>
@@ -285,7 +286,7 @@ export function CallDetail({ initial, audioUrl }: { initial: Call; audioUrl: str
           )}
         </div>
       </div>
-    </div>
+    </FadeIn>
   );
 }
 

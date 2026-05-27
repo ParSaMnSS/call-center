@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 
 type ConfirmOptions = {
   title: string;
@@ -43,32 +44,45 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
   return (
     <ConfirmContext.Provider value={confirm}>
       {children}
-      {opts && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center p-4"
-          onClick={(e) => { if (e.target === e.currentTarget) close(false); }}
-        >
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
-          <div className="panel relative max-w-md w-full p-6 animate-in fade-in zoom-in-95 duration-150">
-            <h3 className="text-lg font-semibold">{opts.title}</h3>
-            {opts.message && (
-              <p className="text-sm text-muted mt-2 leading-7">{opts.message}</p>
-            )}
-            <div className="mt-6 flex items-center justify-end gap-2">
-              <button onClick={() => close(false)} className="btn">
-                {opts.cancelLabel ?? "انصراف"}
-              </button>
-              <button
-                onClick={() => close(true)}
-                className={"btn " + (opts.kind === "danger" ? "btn-danger" : "btn-primary")}
-                autoFocus
-              >
-                {opts.confirmLabel ?? "تأیید"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <AnimatePresence>
+        {opts && (
+          <motion.div
+            key="confirm-root"
+            className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+            onClick={(e) => { if (e.target === e.currentTarget) close(false); }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+          >
+            <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" />
+            <motion.div
+              className="panel relative max-w-md w-full p-6"
+              initial={{ opacity: 0, scale: 0.96, y: 4 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 4 }}
+              transition={{ duration: 0.18, ease: [0.22, 0.61, 0.36, 1] }}
+            >
+              <h3 className="text-lg font-semibold tracking-tight text-fg">{opts.title}</h3>
+              {opts.message && (
+                <p className="text-sm text-muted mt-2 leading-7">{opts.message}</p>
+              )}
+              <div className="mt-6 flex items-center justify-end gap-2">
+                <button onClick={() => close(false)} className="btn">
+                  {opts.cancelLabel ?? "انصراف"}
+                </button>
+                <button
+                  onClick={() => close(true)}
+                  className={"btn " + (opts.kind === "danger" ? "btn-danger" : "btn-primary")}
+                  autoFocus
+                >
+                  {opts.confirmLabel ?? "تأیید"}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </ConfirmContext.Provider>
   );
 }

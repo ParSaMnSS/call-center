@@ -17,9 +17,9 @@ export function StatCard({ label, value, delta, hint }: Props) {
 
   return (
     <div className="panel p-4 md:p-5">
-      <div className="text-xs text-muted">{label}</div>
-      <div className="mt-2 text-2xl md:text-3xl font-bold fa-nums">{value}</div>
-      <div className="mt-2 flex items-center gap-2 min-h-[1.25rem]">
+      <div className="text-xs text-muted uppercase tracking-wide">{label}</div>
+      <div className="mt-2 text-3xl md:text-4xl font-bold tracking-tight text-fg fa-nums">{value}</div>
+      <div className="mt-2.5 flex items-center gap-2 min-h-[1.25rem]">
         {delta && (
           <span className={`badge ${chip} text-xs fa-nums`}>{delta.text}</span>
         )}

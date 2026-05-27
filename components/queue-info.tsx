@@ -114,7 +114,7 @@ export function QueueInfo({ call, allCalls, medianSec, variant = "compact" }: Pr
     return (
       <div className="text-[11px] text-muted fa-nums leading-tight">
         {isProcessing && (
-          <div>{t.elapsed}: <span className="text-text">{formatFaDuration(elapsedSec)}</span></div>
+          <div>{t.elapsed}: <span className="text-fg font-medium">{formatFaDuration(elapsedSec)}</span></div>
         )}
         {isPending && total > 1 && (
           <div>{t.queuePosition(position, total)}</div>
@@ -153,9 +153,9 @@ export function QueueInfo({ call, allCalls, medianSec, variant = "compact" }: Pr
 
 function Stat({ label, value, inline, hint }: { label: string; value: string; inline?: string; hint?: string }) {
   return (
-    <div className="bg-panel2/50 rounded-lg p-2.5">
-      <div className="text-[10px] text-muted">{label}</div>
-      <div className="mt-0.5 text-sm font-semibold">{inline || value}</div>
+    <div className="bg-surface2 border border-border rounded-lg p-2.5">
+      <div className="text-[10px] text-muted uppercase tracking-wide">{label}</div>
+      <div className="mt-0.5 text-sm font-semibold text-fg">{inline || value}</div>
       {hint && <div className="text-[10px] text-muted mt-0.5">{hint}</div>}
     </div>
   );
