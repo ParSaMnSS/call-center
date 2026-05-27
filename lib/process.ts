@@ -180,12 +180,13 @@ export async function processNextInline(maxChain = 5): Promise<{
   let processed = 0;
   let transientStopped = false;
 
-  // Sweep rows stuck in analyzing/transcribing for >6 min. The Vercel function
-  // maxDuration is 300s (5 min); anything older almost certainly means the
-  // worker instance was killed mid-Gemini-call (deploy, OOM, eviction) and the
-  // row will never be touched again. Without this, the queue can deadlock
-  // because the inFlight check below sees a stuck row and skips forever.
-  const sixMinAgo = new Date(Date.now() - 6 * 60_000).toISOString();
+  // Sweep rows stuck in analyzing/transcribing for >2 min. A normal Gemini
+  // call on a 20MB audio finishes well under 90s; anything older almost
+  // certainly means the worker instance was killed mid-call (after() callback
+  // cut short by a Vercel function shutdown, OOM, eviction). Without this,
+  // the queue can deadlock because the inFlight check below sees a stuck row
+  // and skips forever.
+  const staleCutoff = new Date(Date.now() - 2 * 60_000).toISOString();
   const { data: swept, error: sweepErr } = await sb
     .from("calls")
     .update({
@@ -194,7 +195,7 @@ export async function processNextInline(maxChain = 5): Promise<{
       error_message: "پردازش به دلیل قطع شدن سرور بازنشانی شد",
     })
     .in("status", ["analyzing", "transcribing"])
-    .lt("processing_started_at", sixMinAgo)
+    .lt("processing_started_at", staleCutoff)
     .select("id");
   const sweptCount = swept?.length ?? 0;
   if (sweepErr) {

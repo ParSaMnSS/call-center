@@ -5,30 +5,15 @@ import { useRouter } from "next/navigation";
 import { AnimatePresence } from "framer-motion";
 import { Upload } from "lucide-react";
 import { useToast } from "@/components/toast";
-import { UploadProgressRow, type RowState } from "@/components/upload-progress-row";
-import { extractPhoneFromFilename } from "@/lib/phone";
-import { uploadDirect, type UploadHandle } from "@/lib/upload-direct";
+import { UploadProgressRow } from "@/components/upload-progress-row";
+import { useUpload, type UploadItem } from "@/lib/upload-context";
 import { formatFaDuration, t } from "@/lib/strings";
-
-const MAX_BYTES = 20 * 1024 * 1024;
-
-type Item = {
-  key: string;
-  file: File;
-  phone: string | null;
-  state: RowState;
-  resultId?: string;
-  handle?: UploadHandle;
-};
-
-function newKey() { return Math.random().toString(36).slice(2); }
 
 export function UploadForm() {
   const router = useRouter();
   const toast = useToast();
-  const [items, setItems] = useState<Item[]>([]);
+  const { items, uploading, addFiles, removeItem, clearItems, startAll } = useUpload();
   const [dragging, setDragging] = useState(false);
-  const [uploading, setUploading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Batch ETA — recomputed every second while uploading.
@@ -39,81 +24,22 @@ export function UploadForm() {
     return () => clearInterval(id);
   }, [uploading]);
 
-  function add(files: FileList | File[] | null) {
-    if (!files) return;
-    const incoming: Item[] = [];
-    for (const f of Array.from(files)) {
-      const valid = f.size > 0 && f.size <= MAX_BYTES;
-      incoming.push({
-        key: newKey(),
-        file: f,
-        phone: extractPhoneFromFilename(f.name),
-        state: valid
-          ? { kind: "queued" }
-          : { kind: "error", message: f.size > MAX_BYTES ? t.fileTooLarge : t.invalidFileType },
-      });
-    }
-    setItems((prev) => [...prev, ...incoming]);
-  }
-
-  function remove(key: string) {
-    setItems((prev) => prev.filter((i) => i.key !== key));
-  }
-
   async function uploadAll() {
-    const queue = items.filter((i) => i.state.kind === "queued");
-    if (queue.length === 0) return;
-    setUploading(true);
+    await startAll({
+      onAllDone: ({ successCount, errorCount, firstId }) => {
+        if (successCount > 0 && errorCount === 0) {
+          toast.show(successCount === 1 ? t.uploadSuccess : t.uploadSuccessMany(successCount), "success");
+        } else if (successCount > 0 && errorCount > 0) {
+          toast.show(`${successCount.toLocaleString("fa-IR")} موفق، ${errorCount.toLocaleString("fa-IR")} ناموفق`, "info");
+        } else {
+          toast.show(t.uploadError, "error");
+        }
 
-    let successCount = 0;
-    let errorCount = 0;
-    let firstId: string | undefined;
-
-    // Sequential — keeps things predictable for the worker queue + the toast log.
-    for (const item of queue) {
-      const { handle, result } = uploadDirect({
-        file: item.file,
-        onProgress: (p) => {
-          setItems((prev) =>
-            prev.map((i) =>
-              i.key === item.key ? { ...i, state: { kind: "uploading", progress: p } } : i
-            )
-          );
-        },
-      });
-      // Stash the handle so the user can cancel.
-      setItems((prev) => prev.map((i) => i.key === item.key ? { ...i, handle } : i));
-
-      const res = await result;
-      if (res.ok) {
-        successCount++;
-        if (!firstId) firstId = res.id;
-        setItems((prev) =>
-          prev.map((i) => i.key === item.key ? { ...i, state: { kind: "done" }, resultId: res.id, handle: undefined } : i)
-        );
-      } else {
-        errorCount++;
-        setItems((prev) =>
-          prev.map((i) => i.key === item.key ? { ...i, state: { kind: "error", message: res.error }, handle: undefined } : i)
-        );
-      }
-    }
-
-    setUploading(false);
-
-    if (successCount > 0 && errorCount === 0) {
-      toast.show(successCount === 1 ? t.uploadSuccess : t.uploadSuccessMany(successCount), "success");
-    } else if (successCount > 0 && errorCount > 0) {
-      toast.show(`${successCount.toLocaleString("fa-IR")} موفق، ${errorCount.toLocaleString("fa-IR")} ناموفق`, "info");
-    } else {
-      toast.show(t.uploadError, "error");
-    }
-
-    if (successCount === 1 && errorCount === 0 && firstId) {
-      router.push(`/dashboard/calls/${firstId}`);
-    } else if (successCount > 0) {
-      setItems((prev) => prev.filter((i) => i.state.kind !== "done"));
-    }
+        if (successCount === 1 && errorCount === 0 && firstId) {
+          router.push(`/dashboard/calls/${firstId}`);
+        }
+      },
+    });
   }
 
   const queueable = items.filter((i) => i.state.kind === "queued").length;
@@ -134,7 +60,7 @@ export function UploadForm() {
         onDragLeave={() => setDragging(false)}
         onDrop={(e) => {
           e.preventDefault(); setDragging(false);
-          add(e.dataTransfer.files);
+          addFiles(e.dataTransfer.files, { tooLargeMsg: t.fileTooLarge });
         }}
         onClick={() => inputRef.current?.click()}
         className={
@@ -156,7 +82,7 @@ export function UploadForm() {
           multiple
           accept="audio/*,.mp3,.wav,.m4a,.ogg,.webm,.aac,.flac,.mp4"
           className="hidden"
-          onChange={(e) => { add(e.target.files); e.target.value = ""; }}
+          onChange={(e) => { addFiles(e.target.files, { tooLargeMsg: t.fileTooLarge }); e.target.value = ""; }}
         />
       </div>
 
@@ -189,7 +115,7 @@ export function UploadForm() {
             </div>
             {!uploading && (
               <button
-                onClick={() => setItems([])}
+                onClick={clearItems}
                 disabled={uploading}
                 className="btn btn-ghost text-xs text-muted"
               >
@@ -212,7 +138,7 @@ export function UploadForm() {
                   phone={it.phone}
                   state={it.state}
                   removable={!uploading}
-                  onRemove={() => remove(it.key)}
+                  onRemove={() => removeItem(it.key)}
                 />
               ))}
             </AnimatePresence>
@@ -243,7 +169,7 @@ export function UploadForm() {
 
 // Aggregate ETA across all in-flight uploads. Pretty rough — assumes the
 // remaining queued files will upload at the current average throughput.
-function computeBatchEta(items: Item[]): number | null {
+function computeBatchEta(items: UploadItem[]): number | null {
   let remainingBytes = 0;
   let aggregateRate = 0;
   let hasActive = false;

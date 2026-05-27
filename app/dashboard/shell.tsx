@@ -9,6 +9,8 @@ import { ToastProvider } from "@/components/toast";
 import { ConfirmProvider } from "@/components/confirm-dialog";
 import { ConnectionIndicator } from "@/components/connection-indicator";
 import { RealtimeProvider } from "@/lib/realtime-context";
+import { UploadProvider } from "@/lib/upload-context";
+import { UploadStatusBadge } from "@/components/upload-status-badge";
 import { t } from "@/lib/strings";
 
 export function Shell({ children, email }: { children: React.ReactNode; email: string | null }) {
@@ -58,6 +60,7 @@ export function Shell({ children, email }: { children: React.ReactNode; email: s
         })}
       </nav>
       <div className="p-3 border-t border-border space-y-2">
+        <UploadStatusBadge />
         <ConnectionIndicator />
         {email && <div className="text-xs text-muted truncate px-2" dir="ltr">{email}</div>}
         <LogoutButton />
@@ -69,6 +72,7 @@ export function Shell({ children, email }: { children: React.ReactNode; email: s
     <ToastProvider>
       <ConfirmProvider>
         <RealtimeProvider>
+        <UploadProvider>
         <div className="min-h-screen flex">
           {/* Desktop sidebar */}
           <div className="hidden md:block sticky top-0 self-start">{Sidebar}</div>
@@ -103,6 +107,7 @@ export function Shell({ children, email }: { children: React.ReactNode; email: s
             <div className="max-w-7xl mx-auto px-4 py-5 md:p-8">{children}</div>
           </main>
         </div>
+        </UploadProvider>
         </RealtimeProvider>
       </ConfirmProvider>
     </ToastProvider>
