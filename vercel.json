@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/retry-pending",
-      "schedule": "*/10 * * * *"
+      "schedule": "* * * * *"
     }
   ]
 }

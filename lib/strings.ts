@@ -170,6 +170,7 @@ export const t = {
   aiBusyBody: "تماس‌ها در صف انتظار باقی می‌مانند و به‌محض در دسترس بودن سرویس، تحلیل به‌صورت خودکار از سر گرفته می‌شود.",
   aiBusyNextRetry: (mmss: string) => `تلاش بعدی تا ${mmss} دیگر`,
   aiBusyRetryingNow: "در حال تلاش مجدد…",
+  aiBusyRetryNow: "تلاش مجدد فوری",
 } as const;
 
 export function statusLabel(s: string): string {

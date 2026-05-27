@@ -162,3 +162,51 @@ export async function claimAndProcessNext(): Promise<
 
   return { claimed: true, id: claimed.id };
 }
+
+// Synchronous variant of claimAndProcessNext: runs processCall inline and
+// waits for it to finish before returning. Used by the cron route so the
+// retry actually completes within the cron invocation (`after()` callbacks
+// can be cut off when the function instance shuts down). If the call
+// succeeds, this also chains to the next pending row inline.
+//
+// Returns counts so the cron response is observable.
+export async function processNextInline(maxChain = 5): Promise<{
+  processed: number;
+  transientStopped: boolean;
+  drained: boolean;
+}> {
+  const sb = createServiceClient();
+  let processed = 0;
+  let transientStopped = false;
+
+  for (let i = 0; i < maxChain; i++) {
+    // Don't claim if something else is already working.
+    const { count: inFlight, error: countErr } = await sb
+      .from("calls")
+      .select("id", { count: "exact", head: true })
+      .in("status", ["analyzing", "transcribing"]);
+    if (countErr) throw new Error(countErr.message);
+    if ((inFlight ?? 0) > 0) {
+      console.log(`[processNextInline] skip — ${inFlight} already in flight`);
+      return { processed, transientStopped: false, drained: false };
+    }
+
+    const { data, error } = await sb.rpc("claim_next_call");
+    if (error) throw new Error(error.message);
+    const claimed = (data as Array<{ id: string; audio_path: string; original_filename: string | null }> | null)?.[0];
+    if (!claimed) {
+      return { processed, transientStopped, drained: true };
+    }
+
+    console.log(`[processNextInline] processing ${claimed.id} inline`);
+    const t0 = Date.now();
+    const result = await processCall(sb, claimed.id, claimed.audio_path, claimed.original_filename);
+    console.log(`[processNextInline] finished ${claimed.id} in ${Math.round((Date.now() - t0) / 1000)}s (transient=${result.transient})`);
+    processed++;
+    if (result.transient) {
+      transientStopped = true;
+      return { processed, transientStopped, drained: false };
+    }
+  }
+  return { processed, transientStopped, drained: false };
+}

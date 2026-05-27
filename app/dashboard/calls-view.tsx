@@ -435,19 +435,16 @@ function CallRow({
   );
 }
 
-// Cron runs every 10 min on the wall clock (`*/10 * * * *`), so the next
-// retry fires at the next multiple of 10 minutes past the hour.
+// Cron runs every minute on the wall clock (`* * * * *`), so the next retry
+// fires at the next :00 second of the next minute.
 function secondsUntilNextCron(now = new Date()): number {
-  const minutes = now.getMinutes();
-  const seconds = now.getSeconds();
-  const nextSlot = (Math.floor(minutes / 10) + 1) * 10;
-  const minsLeft = nextSlot - minutes - 1;
-  const secsLeft = 60 - seconds;
-  return minsLeft * 60 + secsLeft;
+  return 60 - now.getSeconds();
 }
 
 function AIBusyBanner() {
   const [secondsLeft, setSecondsLeft] = useState(() => secondsUntilNextCron());
+  const [manualRetrying, setManualRetrying] = useState(false);
+  const toast = useToast();
 
   useEffect(() => {
     const tick = () => setSecondsLeft(secondsUntilNextCron());
@@ -456,7 +453,27 @@ function AIBusyBanner() {
     return () => clearInterval(id);
   }, []);
 
-  const retryingNow = secondsLeft <= 5;
+  const retryingNow = manualRetrying || secondsLeft <= 5;
+
+  async function handleRetryNow() {
+    if (manualRetrying) return;
+    setManualRetrying(true);
+    try {
+      const res = await fetch("/api/retry-pending", { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.show(body.error || "خطا در تلاش مجدد", "error");
+      } else if (body.processed > 0) {
+        toast.show("تحلیل از سر گرفته شد", "success");
+      } else if (body.transientStopped) {
+        toast.show("سرویس هنوز در دسترس نیست — به‌زودی دوباره تلاش می‌شود", "info");
+      } else {
+        toast.show("تماس قابل پردازشی پیدا نشد", "info");
+      }
+    } finally {
+      setManualRetrying(false);
+    }
+  }
 
   return (
     <motion.div
@@ -477,23 +494,33 @@ function AIBusyBanner() {
         <div className="text-sm text-amber-900/80 mt-1 leading-7">
           {t.aiBusyBody}
         </div>
-        <div className="mt-3 inline-flex items-center gap-2 rounded-lg bg-white border border-amber-200 px-3 py-1.5">
-          {retryingNow ? (
-            <>
-              <Loader2 className="w-4 h-4 text-amber-700 animate-spin" />
-              <span className="text-sm font-semibold text-amber-900">{t.aiBusyRetryingNow}</span>
-            </>
-          ) : (
-            <>
-              <span className="relative flex h-2.5 w-2.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-500 opacity-60" />
-                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-600" />
-              </span>
-              <span className="text-sm font-semibold text-amber-900 fa-nums">
-                {t.aiBusyNextRetry(formatFaDuration(secondsLeft))}
-              </span>
-            </>
-          )}
+        <div className="mt-3 flex items-center gap-2 flex-wrap">
+          <div className="inline-flex items-center gap-2 rounded-lg bg-surface border border-amber-200 px-3 py-1.5">
+            {retryingNow ? (
+              <>
+                <Loader2 className="w-4 h-4 text-amber-700 animate-spin" />
+                <span className="text-sm font-semibold text-amber-900">{t.aiBusyRetryingNow}</span>
+              </>
+            ) : (
+              <>
+                <span className="relative flex h-2.5 w-2.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-500 opacity-60" />
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-600" />
+                </span>
+                <span className="text-sm font-semibold text-amber-900 fa-nums">
+                  {t.aiBusyNextRetry(formatFaDuration(secondsLeft))}
+                </span>
+              </>
+            )}
+          </div>
+          <button
+            onClick={handleRetryNow}
+            disabled={manualRetrying}
+            className="btn text-sm border-amber-300 bg-surface text-amber-900 hover:bg-amber-50 hover:border-amber-400"
+          >
+            {manualRetrying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+            {t.aiBusyRetryNow}
+          </button>
         </div>
       </div>
     </motion.div>
