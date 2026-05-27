@@ -7,7 +7,7 @@
 
 import { after } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { analyzeAudio } from "@/lib/ai";
+import { analyzeAudio, TransientAIError } from "@/lib/ai";
 import { extractPhoneFromFilename } from "@/lib/phone";
 import { createServiceClient } from "@/lib/supabase/server";
 
@@ -24,7 +24,7 @@ export async function processCall(
   id: string,
   audioPath: string,
   filenameHint: string | null,
-): Promise<void> {
+): Promise<{ transient: boolean }> {
   const startMs = Date.now();
   try {
     const { data: signed, error: signErr } = await sb.storage
@@ -48,7 +48,7 @@ export async function processCall(
       throw new Error("متن مکالمه استخراج نشد. ممکن است فایل صوتی نامفهوم باشد.");
     }
 
-    if (await isAborted(sb, id)) return;
+    if (await isAborted(sb, id)) return { transient: false };
 
     const finalPhone = analysis.caller_phone || phoneHint;
 
@@ -72,14 +72,30 @@ export async function processCall(
       processing_seconds: elapsedSec,
       status: "done",
     }).eq("id", id);
+    return { transient: false };
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : "خطای ناشناخته";
-    if (!(await isAborted(sb, id))) {
+    if (await isAborted(sb, id)) return { transient: false };
+
+    // Transient (Gemini overloaded / rate limit / network blip): revert to
+    // pending and let the cron retry later. Stash the message in
+    // error_message so the UI can show *why* it's still queued.
+    if (e instanceof TransientAIError) {
+      console.warn(`[processCall] ${id} transient: ${message} — reverting to pending`);
       await sb.from("calls").update({
-        status: "failed",
+        status: "pending",
+        processing_started_at: null,
         error_message: message,
       }).eq("id", id);
+      return { transient: true };
     }
+
+    // Permanent failure — mark failed, worker will continue to the next row.
+    await sb.from("calls").update({
+      status: "failed",
+      error_message: message,
+    }).eq("id", id);
+    return { transient: false };
   }
 }
 
@@ -111,9 +127,14 @@ export async function claimAndProcessNext(): Promise<
 
   after(async () => {
     const t0 = Date.now();
-    await processCall(sb, claimed.id, claimed.audio_path, claimed.original_filename);
-    console.log(`[claimAndProcessNext] finished ${claimed.id} in ${Math.round((Date.now() - t0) / 1000)}s`);
-    // Chain to the next pending call directly — no HTTP round-trip.
+    const result = await processCall(sb, claimed.id, claimed.audio_path, claimed.original_filename);
+    console.log(`[claimAndProcessNext] finished ${claimed.id} in ${Math.round((Date.now() - t0) / 1000)}s (transient=${result.transient})`);
+    // If Gemini is overloaded, pause the queue — the /api/retry-pending cron
+    // will pick things back up. Otherwise chain to the next pending row.
+    if (result.transient) {
+      console.warn("[claimAndProcessNext] queue paused due to transient AI error; cron will retry");
+      return;
+    }
     try {
       await claimAndProcessNext();
     } catch (e) {

@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { claimAndProcessNext } from "@/lib/process";
 import { revalidatePath } from "next/cache";
 
 export async function deleteCall(id: string): Promise<{ error?: string }> {
@@ -60,4 +61,55 @@ export async function cancelCall(id: string): Promise<{ error?: string }> {
 	if (error) return { error: error.message };
 	revalidatePath("/dashboard");
 	return {};
+}
+
+// Flip every failed call back to pending and kick the worker. Used by the
+// dashboard "Analyze all failed" button. Also clears any audio_path === 'pending'
+// guard issues since failed rows always have a real path by this point.
+export async function retryAllFailed(): Promise<{ count: number; error?: string }> {
+	const sb = await createClient();
+
+	const { data, error } = await sb
+		.from("calls")
+		.update({
+			status: "pending",
+			processing_started_at: null,
+			error_message: null,
+		})
+		.eq("status", "failed")
+		.select("id");
+
+	if (error) return { count: 0, error: error.message };
+
+	// Kick the serial worker (no-op if nothing pending).
+	try {
+		await claimAndProcessNext();
+	} catch (e) {
+		console.error("[retryAllFailed] kick failed:", e);
+	}
+
+	revalidatePath("/dashboard");
+	return { count: data?.length ?? 0 };
+}
+
+// Cancel every in-flight call (pending + analyzing + transcribing). Used by
+// the dashboard "Stop all" button. The currently-running Gemini call can't
+// actually be interrupted mid-flight, but processCall checks isAborted()
+// before writing results, so its output gets discarded.
+export async function cancelAllProcessing(): Promise<{ count: number; error?: string }> {
+	const sb = await createClient();
+
+	const { data, error } = await sb
+		.from("calls")
+		.update({
+			status: "failed",
+			error_message: "لغو دسته‌جمعی توسط کاربر",
+		})
+		.in("status", ["pending", "analyzing", "transcribing"])
+		.select("id");
+
+	if (error) return { count: 0, error: error.message };
+
+	revalidatePath("/dashboard");
+	return { count: data?.length ?? 0 };
 }

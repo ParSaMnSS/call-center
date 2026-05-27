@@ -156,6 +156,17 @@ export const t = {
   cancelled: "لغو شده توسط کاربر",
   unknown: "—",
   errorOccurred: "خطا در پردازش",
+
+  // Bulk actions
+  retryAllFailed: (n: number) => `تحلیل مجدد همه ناموفق‌ها (${n.toLocaleString("fa-IR")})`,
+  stopAllProcessing: (n: number) => `توقف همه (${n.toLocaleString("fa-IR")})`,
+  confirmRetryAll: "تحلیل مجدد همه تماس‌های ناموفق؟",
+  confirmRetryAllMsg: "تمام تماس‌هایی که با خطا متوقف شده‌اند دوباره به صف تحلیل اضافه می‌شوند.",
+  confirmStopAll: "توقف همه تماس‌های در حال پردازش؟",
+  confirmStopAllMsg: "تماس‌هایی که در صف یا در حال تحلیل هستند لغو می‌شوند. این عمل غیرقابل بازگشت است (اما می‌توانید دوباره تحلیل را آغاز کنید).",
+  bulkRetried: (n: number) => `${n.toLocaleString("fa-IR")} تماس به صف تحلیل اضافه شد`,
+  bulkCancelled: (n: number) => `${n.toLocaleString("fa-IR")} تماس لغو شد`,
+  aiBusyHint: "سرویس هوش مصنوعی موقتاً شلوغ است — تلاش مجدد به‌صورت خودکار هر ۱۰ دقیقه انجام می‌شود.",
 } as const;
 
 export function statusLabel(s: string): string {

@@ -7,12 +7,12 @@ import type { Call, Sentiment } from "@/lib/supabase/types";
 import { StatusBadge } from "@/components/status-badge";
 import { SentimentDot } from "@/components/sentiment-dot";
 import { formatFaDate, resolvedLabel, t } from "@/lib/strings";
-import { deleteCall } from "@/lib/actions";
+import { cancelAllProcessing, deleteCall, retryAllFailed } from "@/lib/actions";
 import { kickWorker } from "@/app/dashboard/upload/actions";
 import { useToast } from "@/components/toast";
 import { useConfirm } from "@/components/confirm-dialog";
 import { QueueInfo, medianProcessingSeconds } from "@/components/queue-info";
-import { Trash2, Loader2 } from "lucide-react";
+import { Trash2, Loader2, Play, StopCircle, Clock } from "lucide-react";
 
 type ResolvedFilter = "all" | "yes" | "no";
 type SentimentFilter = "all" | Sentiment;
@@ -122,8 +122,29 @@ export function CallsView({ initial }: { initial: Call[] }) {
 
   const medianSec = useMemo(() => medianProcessingSeconds(calls), [calls]);
 
+  const failedCount = useMemo(() => calls.filter((c) => c.status === "failed").length, [calls]);
+  const processingCount = useMemo(
+    () => calls.filter((c) => c.status === "pending" || c.status === "analyzing" || c.status === "transcribing").length,
+    [calls],
+  );
+  // Heuristic: if any pending row carries an error_message, the AI is busy
+  // and the cron is the one driving recovery. Show a calm banner so users
+  // know it's expected.
+  const aiBusy = useMemo(
+    () => calls.some((c) => c.status === "pending" && c.error_message),
+    [calls],
+  );
+
   return (
     <div className="space-y-4">
+      {(failedCount > 0 || processingCount > 0 || aiBusy) && (
+        <BulkActionsBar
+          failedCount={failedCount}
+          processingCount={processingCount}
+          aiBusy={aiBusy}
+        />
+      )}
+
       {/* Search + filter toggle */}
       <div className="panel p-3 md:p-4">
         <div className="flex items-center gap-2">
@@ -396,6 +417,82 @@ function CallRow({
         <DeleteButton id={c.id} onDeleted={onDeleted} />
       </td>
     </tr>
+  );
+}
+
+function BulkActionsBar({
+  failedCount, processingCount, aiBusy,
+}: {
+  failedCount: number;
+  processingCount: number;
+  aiBusy: boolean;
+}) {
+  const toast = useToast();
+  const confirm = useConfirm();
+  const [retrying, startRetry] = useTransition();
+  const [stopping, startStop] = useTransition();
+
+  async function handleRetryAll() {
+    const ok = await confirm({
+      title: t.confirmRetryAll,
+      message: t.confirmRetryAllMsg,
+      confirmLabel: t.retryAllFailed(failedCount),
+      cancelLabel: "انصراف",
+    });
+    if (!ok) return;
+    startRetry(async () => {
+      const res = await retryAllFailed();
+      if (res.error) toast.show(res.error, "error");
+      else toast.show(t.bulkRetried(res.count), "success");
+    });
+  }
+
+  async function handleStopAll() {
+    const ok = await confirm({
+      title: t.confirmStopAll,
+      message: t.confirmStopAllMsg,
+      confirmLabel: t.stopAllProcessing(processingCount),
+      cancelLabel: "انصراف",
+      kind: "danger",
+    });
+    if (!ok) return;
+    startStop(async () => {
+      const res = await cancelAllProcessing();
+      if (res.error) toast.show(res.error, "error");
+      else toast.show(t.bulkCancelled(res.count), "info");
+    });
+  }
+
+  return (
+    <div className="panel p-3 md:p-4 flex flex-wrap items-center gap-2">
+      {aiBusy && (
+        <div className="flex items-center gap-2 text-xs text-warn bg-warn/10 border border-warn/30 rounded-lg px-3 py-1.5 me-auto">
+          <Clock className="w-3.5 h-3.5 shrink-0" />
+          <span>{t.aiBusyHint}</span>
+        </div>
+      )}
+      {!aiBusy && <div className="me-auto" />}
+      {failedCount > 0 && (
+        <button
+          onClick={handleRetryAll}
+          disabled={retrying}
+          className="btn btn-primary text-sm inline-flex items-center gap-1.5"
+        >
+          {retrying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+          <span>{t.retryAllFailed(failedCount)}</span>
+        </button>
+      )}
+      {processingCount > 0 && (
+        <button
+          onClick={handleStopAll}
+          disabled={stopping}
+          className="btn btn-danger text-sm inline-flex items-center gap-1.5"
+        >
+          {stopping ? <Loader2 className="w-4 h-4 animate-spin" /> : <StopCircle className="w-4 h-4" />}
+          <span>{t.stopAllProcessing(processingCount)}</span>
+        </button>
+      )}
+    </div>
   );
 }
 

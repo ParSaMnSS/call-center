@@ -94,6 +94,35 @@ export type AnalyzeOptions = {
   phoneHint?: string | null;
 };
 
+// Thrown when Gemini is temporarily unavailable (503 UNAVAILABLE, 429 rate
+// limit, network blips). Caller is expected to keep the row in `pending`
+// and try again later rather than marking it `failed`.
+export class TransientAIError extends Error {
+  constructor(message: string, public readonly status?: number) {
+    super(message);
+    this.name = "TransientAIError";
+  }
+}
+
+function isTransient(e: unknown): { transient: boolean; status?: number; message: string } {
+  const message = e instanceof Error ? e.message : String(e);
+  // The @google/genai SDK surfaces HTTP errors as Error with the JSON body
+  // embedded in .message. Cheap-and-cheerful detection from the string.
+  const m = message.match(/"code"\s*:\s*(\d+)/);
+  const status = m ? Number(m[1]) : undefined;
+  if (status === 503 || status === 429 || status === 500 || status === 504) {
+    return { transient: true, status, message };
+  }
+  if (/UNAVAILABLE|RESOURCE_EXHAUSTED|DEADLINE_EXCEEDED|INTERNAL/i.test(message)) {
+    return { transient: true, status, message };
+  }
+  // Network-level errors (DNS, connection reset, fetch failure)
+  if (e instanceof TypeError || /fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND/i.test(message)) {
+    return { transient: true, status, message };
+  }
+  return { transient: false, status, message };
+}
+
 export async function analyzeAudio(
   file: File,
   options: AnalyzeOptions = {}
@@ -119,33 +148,55 @@ export async function analyzeAudio(
     "این فایل صوتی را پیاده‌سازی و تحلیل کنید و خروجی را به صورت JSON طبق طرحواره مشخص‌شده بازگردانید.",
   ].filter(Boolean).join("\n\n");
 
-  const response = await client().models.generateContent({
-    model: MODEL,
-    contents: [
-      {
-        role: "user",
-        parts: [
+  // Two in-process retries (1s, 3s) for short blips. If it's still transient
+  // after that, throw TransientAIError so the worker pauses the queue and
+  // the cron retries later.
+  const delays = [1000, 3000];
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    try {
+      const response = await client().models.generateContent({
+        model: MODEL,
+        contents: [
           {
-            inlineData: {
-              mimeType: file.type || "audio/mpeg",
-              data: base64,
-            },
+            role: "user",
+            parts: [
+              {
+                inlineData: {
+                  mimeType: file.type || "audio/mpeg",
+                  data: base64,
+                },
+              },
+              { text: userText },
+            ],
           },
-          { text: userText },
         ],
-      },
-    ],
-    config: {
-      systemInstruction: SYSTEM_INSTRUCTION,
-      temperature: 0.2,
-      responseMimeType: "application/json",
-      responseSchema: RESPONSE_SCHEMA,
-    },
-  });
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION,
+          temperature: 0.2,
+          responseMimeType: "application/json",
+          responseSchema: RESPONSE_SCHEMA,
+        },
+      });
 
-  const raw = response.text ?? "{}";
-  const parsed = JSON.parse(raw);
-  const analysis = AnalysisSchema.parse(parsed);
-
-  return { analysis };
+      const raw = response.text ?? "{}";
+      const parsed = JSON.parse(raw);
+      const analysis = AnalysisSchema.parse(parsed);
+      return { analysis };
+    } catch (e) {
+      lastErr = e;
+      const t = isTransient(e);
+      if (!t.transient) throw e;
+      if (attempt < delays.length) {
+        await new Promise((r) => setTimeout(r, delays[attempt]));
+        continue;
+      }
+      throw new TransientAIError(
+        `سرویس هوش مصنوعی موقتاً در دسترس نیست${t.status ? ` (${t.status})` : ""}. تلاش مجدد به‌صورت خودکار انجام می‌شود.`,
+        t.status,
+      );
+    }
+  }
+  // Unreachable, but TS needs it.
+  throw lastErr instanceof Error ? lastErr : new Error("unknown");
 }
