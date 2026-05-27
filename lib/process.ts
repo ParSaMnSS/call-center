@@ -108,9 +108,27 @@ export async function processCall(
 // server action, server component) — that's where after() can register
 // background work. Idempotent: if no pending row, returns { claimed: false }.
 export async function claimAndProcessNext(): Promise<
-  { claimed: false } | { claimed: true; id: string }
+  { claimed: false; reason?: "busy" | "empty" } | { claimed: true; id: string }
 > {
   const sb = createServiceClient();
+
+  // Enforce serial processing: if any row is currently in flight, don't
+  // claim another one. The currently-running worker will chain to the next
+  // pending row when it finishes (or the cron will, if it failed transient).
+  // This is what keeps 50 concurrent uploads from spawning 50 parallel
+  // Gemini calls.
+  const { count: inFlight, error: countErr } = await sb
+    .from("calls")
+    .select("id", { count: "exact", head: true })
+    .in("status", ["analyzing", "transcribing"]);
+  if (countErr) {
+    console.error("[claimAndProcessNext] in-flight count failed:", countErr.message);
+    throw new Error(countErr.message);
+  }
+  if ((inFlight ?? 0) > 0) {
+    console.log(`[claimAndProcessNext] skip — ${inFlight} already in flight`);
+    return { claimed: false, reason: "busy" };
+  }
 
   const { data, error } = await sb.rpc("claim_next_call");
   if (error) {
@@ -120,7 +138,7 @@ export async function claimAndProcessNext(): Promise<
   const claimed = (data as Array<{ id: string; audio_path: string; original_filename: string | null }> | null)?.[0];
   if (!claimed) {
     console.log("[claimAndProcessNext] no pending calls");
-    return { claimed: false };
+    return { claimed: false, reason: "empty" };
   }
 
   console.log(`[claimAndProcessNext] claimed ${claimed.id} (${claimed.original_filename ?? claimed.audio_path}) — processing in background`);

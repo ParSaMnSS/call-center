@@ -166,7 +166,10 @@ export const t = {
   confirmStopAllMsg: "تماس‌هایی که در صف یا در حال تحلیل هستند لغو می‌شوند. این عمل غیرقابل بازگشت است (اما می‌توانید دوباره تحلیل را آغاز کنید).",
   bulkRetried: (n: number) => `${n.toLocaleString("fa-IR")} تماس به صف تحلیل اضافه شد`,
   bulkCancelled: (n: number) => `${n.toLocaleString("fa-IR")} تماس لغو شد`,
-  aiBusyHint: "سرویس هوش مصنوعی موقتاً شلوغ است — تلاش مجدد به‌صورت خودکار هر ۱۰ دقیقه انجام می‌شود.",
+  aiBusyTitle: "سرویس هوش مصنوعی موقتاً شلوغ است",
+  aiBusyBody: "تماس‌ها در صف انتظار باقی می‌مانند و به‌محض در دسترس بودن سرویس، تحلیل به‌صورت خودکار از سر گرفته می‌شود.",
+  aiBusyNextRetry: (mmss: string) => `تلاش بعدی تا ${mmss} دیگر`,
+  aiBusyRetryingNow: "در حال تلاش مجدد…",
 } as const;
 
 export function statusLabel(s: string): string {

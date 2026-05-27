@@ -12,7 +12,8 @@ import { kickWorker } from "@/app/dashboard/upload/actions";
 import { useToast } from "@/components/toast";
 import { useConfirm } from "@/components/confirm-dialog";
 import { QueueInfo, medianProcessingSeconds } from "@/components/queue-info";
-import { Trash2, Loader2, Play, StopCircle, Clock } from "lucide-react";
+import { formatFaDuration } from "@/lib/strings";
+import { Trash2, Loader2, Play, StopCircle, AlertTriangle } from "lucide-react";
 
 type ResolvedFilter = "all" | "yes" | "no";
 type SentimentFilter = "all" | Sentiment;
@@ -137,11 +138,11 @@ export function CallsView({ initial }: { initial: Call[] }) {
 
   return (
     <div className="space-y-4">
-      {(failedCount > 0 || processingCount > 0 || aiBusy) && (
+      {aiBusy && <AIBusyBanner />}
+      {(failedCount > 0 || processingCount > 0) && (
         <BulkActionsBar
           failedCount={failedCount}
           processingCount={processingCount}
-          aiBusy={aiBusy}
         />
       )}
 
@@ -420,12 +421,73 @@ function CallRow({
   );
 }
 
+// Cron runs every 10 min on the wall clock (`*/10 * * * *`), so the next
+// retry fires at the next multiple of 10 minutes past the hour.
+function secondsUntilNextCron(now = new Date()): number {
+  const minutes = now.getMinutes();
+  const seconds = now.getSeconds();
+  const nextSlot = (Math.floor(minutes / 10) + 1) * 10;
+  const minsLeft = nextSlot - minutes - 1;
+  const secsLeft = 60 - seconds;
+  return minsLeft * 60 + secsLeft;
+}
+
+function AIBusyBanner() {
+  const [secondsLeft, setSecondsLeft] = useState(() => secondsUntilNextCron());
+
+  useEffect(() => {
+    const tick = () => setSecondsLeft(secondsUntilNextCron());
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const retryingNow = secondsLeft <= 5;
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="rounded-xl2 border-2 border-warn/40 bg-warn/10 p-4 md:p-5 flex items-start gap-3 md:gap-4"
+    >
+      <div className="shrink-0 h-10 w-10 rounded-full bg-warn/20 border border-warn/40 flex items-center justify-center">
+        <AlertTriangle className="w-5 h-5 text-warn" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="font-bold text-base md:text-lg text-warn">
+          {t.aiBusyTitle}
+        </div>
+        <div className="text-sm text-fg/80 mt-1 leading-7">
+          {t.aiBusyBody}
+        </div>
+        <div className="mt-3 inline-flex items-center gap-2 rounded-lg bg-warn/15 border border-warn/30 px-3 py-1.5">
+          {retryingNow ? (
+            <>
+              <Loader2 className="w-4 h-4 text-warn animate-spin" />
+              <span className="text-sm font-semibold text-warn">{t.aiBusyRetryingNow}</span>
+            </>
+          ) : (
+            <>
+              <span className="relative flex h-2.5 w-2.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-warn opacity-60" />
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-warn" />
+              </span>
+              <span className="text-sm font-semibold text-warn fa-nums">
+                {t.aiBusyNextRetry(formatFaDuration(secondsLeft))}
+              </span>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function BulkActionsBar({
-  failedCount, processingCount, aiBusy,
+  failedCount, processingCount,
 }: {
   failedCount: number;
   processingCount: number;
-  aiBusy: boolean;
 }) {
   const toast = useToast();
   const confirm = useConfirm();
@@ -465,13 +527,7 @@ function BulkActionsBar({
 
   return (
     <div className="panel p-3 md:p-4 flex flex-wrap items-center gap-2">
-      {aiBusy && (
-        <div className="flex items-center gap-2 text-xs text-warn bg-warn/10 border border-warn/30 rounded-lg px-3 py-1.5 me-auto">
-          <Clock className="w-3.5 h-3.5 shrink-0" />
-          <span>{t.aiBusyHint}</span>
-        </div>
-      )}
-      {!aiBusy && <div className="me-auto" />}
+      <div className="me-auto" />
       {failedCount > 0 && (
         <button
           onClick={handleRetryAll}
