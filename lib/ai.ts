@@ -130,14 +130,21 @@ function isTransient(e: unknown): { transient: boolean; status?: number; message
   // embedded in .message. Cheap-and-cheerful detection from the string.
   const m = message.match(/"code"\s*:\s*(\d+)/);
   const status = m ? Number(m[1]) : undefined;
-  if (status === 503 || status === 429 || status === 500 || status === 504) {
+  // 5xx server-side issues + 429 rate limit + 408 request timeout.
+  if (status === 503 || status === 429 || status === 500 || status === 504 || status === 408 || status === 502) {
     return { transient: true, status, message };
   }
-  if (/UNAVAILABLE|RESOURCE_EXHAUSTED|DEADLINE_EXCEEDED|INTERNAL/i.test(message)) {
+  // Vertex/Gemini gRPC-style codes embedded in the JSON body, plus a few
+  // wording variants we've seen in the wild from the Vertex backend.
+  if (/UNAVAILABLE|RESOURCE_EXHAUSTED|DEADLINE_EXCEEDED|INTERNAL|ABORTED|CANCELLED|UPSTREAM|gateway timeout|server disconnected|socket hang up|stream closed|timeout/i.test(message)) {
     return { transient: true, status, message };
   }
-  // Network-level errors (DNS, connection reset, fetch failure)
-  if (e instanceof TypeError || /fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND/i.test(message)) {
+  // Network-level errors (DNS, connection reset, fetch failure, TLS reset).
+  if (e instanceof TypeError || /fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE|read ECONNRESET|other side closed|network|aborted/i.test(message)) {
+    return { transient: true, status, message };
+  }
+  // Auth token refresh issues during long calls — these are transient.
+  if (/invalid_grant|token has been expired|UNAUTHENTICATED|credentials/i.test(message)) {
     return { transient: true, status, message };
   }
   return { transient: false, status, message };
@@ -168,10 +175,12 @@ export async function analyzeAudio(
     "این فایل صوتی را پیاده‌سازی و تحلیل کنید و خروجی را به صورت JSON طبق طرحواره مشخص‌شده بازگردانید.",
   ].filter(Boolean).join("\n\n");
 
-  // Two in-process retries (1s, 3s) for short blips. If it's still transient
-  // after that, throw TransientAIError so the worker pauses the queue and
-  // the cron retries later.
-  const delays = [1000, 3000];
+  // Three in-process retries with backoff (1s, 3s, 6s) for short blips.
+  // If it's still transient after that, throw TransientAIError so the
+  // worker pauses the queue and the cron retries later. Extra attempts here
+  // avoid bouncing the row back to `pending` for blips that resolve in
+  // under 10 seconds — the cron only fires every minute.
+  const delays = [1000, 3000, 6000];
   let lastErr: unknown;
   for (let attempt = 0; attempt <= delays.length; attempt++) {
     try {
@@ -200,23 +209,54 @@ export async function analyzeAudio(
       });
 
       const raw = response.text ?? "{}";
+      // Empty response. Vertex occasionally returns this transiently
+      // (content-filter false positives, partial streams). Treat as
+      // transient so the cron retries — better than failing a real call.
+      if (!raw || raw === "{}" || raw.trim().length === 0) {
+        throw new Error("EMPTY_RESPONSE: مدل پاسخی برنگرداند");
+      }
       const parsed = JSON.parse(raw);
       const analysis = AnalysisSchema.parse(parsed);
       return { analysis };
     } catch (e) {
       lastErr = e;
       const t = isTransient(e);
-      if (!t.transient) throw e;
+      // Empty-response retries get folded into transient handling.
+      const isEmpty = e instanceof Error && /EMPTY_RESPONSE/.test(e.message);
+      if (!t.transient && !isEmpty) throw e;
       if (attempt < delays.length) {
+        console.warn(`[analyzeAudio] transient attempt ${attempt + 1} failed${t.status ? ` (${t.status})` : ""}: ${t.message.slice(0, 200)} — retrying in ${delays[attempt]}ms`);
         await new Promise((r) => setTimeout(r, delays[attempt]));
         continue;
       }
       throw new TransientAIError(
-        `سرویس هوش مصنوعی موقتاً در دسترس نیست${t.status ? ` (${t.status})` : ""}. تلاش مجدد به‌صورت خودکار انجام می‌شود.`,
+        humanizeTransientMessage(t),
         t.status,
       );
     }
   }
   // Unreachable, but TS needs it.
   throw lastErr instanceof Error ? lastErr : new Error("unknown");
+}
+
+// Translate the SDK's raw error into a Farsi message the dashboard can show
+// to non-technical users. We don't want to leak HTTP bodies or stack
+// fragments to the UI — those land in error_message which is rendered as-is.
+function humanizeTransientMessage(t: { status?: number; message: string }): string {
+  if (t.status === 429 || /RESOURCE_EXHAUSTED|rate.?limit|quota/i.test(t.message)) {
+    return "سرویس هوش مصنوعی به حد مجاز رسیده است. تلاش مجدد به‌صورت خودکار انجام می‌شود.";
+  }
+  if (t.status === 503 || /UNAVAILABLE|overloaded/i.test(t.message)) {
+    return "سرویس هوش مصنوعی موقتاً شلوغ است. تلاش مجدد به‌صورت خودکار انجام می‌شود.";
+  }
+  if (t.status === 504 || /DEADLINE_EXCEEDED|timeout|UPSTREAM/i.test(t.message)) {
+    return "پاسخ سرویس هوش مصنوعی به‌موقع نرسید. تلاش مجدد به‌صورت خودکار انجام می‌شود.";
+  }
+  if (/EMPTY_RESPONSE/.test(t.message)) {
+    return "مدل پاسخی برنگرداند. تلاش مجدد به‌صورت خودکار انجام می‌شود.";
+  }
+  if (/UNAUTHENTICATED|invalid_grant|credentials|token/i.test(t.message)) {
+    return "احراز هویت موقتاً ناموفق بود. تلاش مجدد به‌صورت خودکار انجام می‌شود.";
+  }
+  return `سرویس هوش مصنوعی موقتاً در دسترس نیست${t.status ? ` (${t.status})` : ""}. تلاش مجدد به‌صورت خودکار انجام می‌شود.`;
 }

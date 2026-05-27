@@ -45,7 +45,10 @@ export async function processCall(
     const { analysis } = await analyzeAudio(file, { filenameHint: hintName, phoneHint });
 
     if (!analysis.transcript || analysis.transcript.trim().length === 0) {
-      throw new Error("متن مکالمه استخراج نشد. ممکن است فایل صوتی نامفهوم باشد.");
+      // Empty transcript is usually transient on Vertex (content filter
+      // flicker, partial response). Bounce back to pending so the cron
+      // retries instead of permanently failing the row.
+      throw new TransientAIError("متن مکالمه استخراج نشد. تلاش مجدد به‌صورت خودکار انجام می‌شود.");
     }
 
     if (await isAborted(sb, id)) return { transient: false };
@@ -91,12 +94,24 @@ export async function processCall(
     }
 
     // Permanent failure — mark failed, worker will continue to the next row.
+    // Strip noisy SDK detail from the user-visible message: the SDK often
+    // appends the full JSON error body. Keep the first ~200 chars so
+    // operators can still debug from the dashboard.
+    console.error(`[processCall] ${id} permanent failure:`, message);
+    const cleanMessage = sanitizeErrorMessage(message);
     await sb.from("calls").update({
       status: "failed",
-      error_message: message,
+      error_message: cleanMessage,
     }).eq("id", id);
     return { transient: false };
   }
+}
+
+function sanitizeErrorMessage(raw: string): string {
+  // Cut off any JSON body the SDK pasted in.
+  const cut = raw.split(/\{"error":/)[0].trim();
+  const trimmed = cut.length > 0 ? cut : raw;
+  return trimmed.length > 240 ? trimmed.slice(0, 237) + "…" : trimmed;
 }
 
 // Claim the oldest pending call and process it in the background via after().
