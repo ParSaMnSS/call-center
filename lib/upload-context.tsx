@@ -19,6 +19,11 @@ import { uploadDirect, type UploadHandle } from "@/lib/upload-direct";
 import type { RowState } from "@/components/upload-progress-row";
 
 const MAX_BYTES = 20 * 1024 * 1024;
+// How many uploads run at the same time. Higher numbers don't increase your
+// upstream bandwidth — they split it — but they do overlap per-request
+// overhead (TLS handshake, signed-URL roundtrip, finalize roundtrip).
+// 6 keeps the pipe saturated without oversubscribing on slow connections.
+const UPLOAD_CONCURRENCY = 6;
 
 export type UploadItem = {
   key: string;
@@ -87,7 +92,7 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
     let errorCount = 0;
     let firstId: string | undefined;
 
-    for (const item of queue) {
+    async function runOne(item: UploadItem): Promise<void> {
       const { handle, result } = uploadDirect({
         file: item.file,
         onProgress: (p) => {
@@ -124,6 +129,19 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
         );
       }
     }
+
+    // Fixed-size worker pool. Each "worker" pulls the next queued item until
+    // the queue is empty, so we never have more than UPLOAD_CONCURRENCY
+    // uploads in flight at once. This is a saturated-pipe scheduler — slow
+    // files don't block fast ones from finishing.
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(UPLOAD_CONCURRENCY, queue.length) }, async () => {
+      while (cursor < queue.length) {
+        const idx = cursor++;
+        await runOne(queue[idx]);
+      }
+    });
+    await Promise.all(workers);
 
     setUploading(false);
     handlers?.onAllDone?.({ successCount, errorCount, firstId });
