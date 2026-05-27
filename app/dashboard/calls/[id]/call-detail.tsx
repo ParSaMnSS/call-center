@@ -150,10 +150,34 @@ export function CallDetail({ initial, audioUrl }: { initial: Call; audioUrl: str
           </div>
         </div>
 
+        {/* Permanent failure — red. */}
         {call.status === "failed" && call.error_message && (
           <div className="mt-4 text-sm bg-red-50 border border-red-200 text-red-900 rounded-lg px-3 py-2.5">
             <div className="font-semibold mb-0.5">{t.errorOccurred}</div>
             <div className="text-xs text-red-800/90 break-words">{call.error_message}</div>
+          </div>
+        )}
+
+        {/* Transient AI failure — row reverted to pending with an error message.
+            Amber to match the dashboard's "AI busy" banner. */}
+        {call.status === "pending" && call.error_message && (
+          <div className="mt-4 text-sm bg-amber-50 border border-amber-200 text-amber-900 rounded-lg px-3 py-2.5">
+            <div className="font-semibold mb-1 flex items-center gap-1.5">
+              {t.aiBusyTitle}
+            </div>
+            <div className="text-xs text-amber-900/80 leading-6">{t.aiBusyBody}</div>
+            <details className="mt-2 group">
+              <summary className="text-xs text-amber-900/80 cursor-pointer hover:text-amber-900 select-none inline-flex items-center gap-1">
+                <span className="group-open:hidden">مشاهده پیام خطا</span>
+                <span className="hidden group-open:inline">پنهان کردن پیام خطا</span>
+              </summary>
+              <div
+                className="mt-2 text-xs text-amber-900 bg-white/60 border border-amber-200 rounded-md px-3 py-2 leading-6 break-words font-mono"
+                dir="ltr"
+              >
+                {call.error_message}
+              </div>
+            </details>
           </div>
         )}
 
