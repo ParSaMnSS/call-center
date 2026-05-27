@@ -174,10 +174,34 @@ export async function processNextInline(maxChain = 5): Promise<{
   processed: number;
   transientStopped: boolean;
   drained: boolean;
+  swept: number;
 }> {
   const sb = createServiceClient();
   let processed = 0;
   let transientStopped = false;
+
+  // Sweep rows stuck in analyzing/transcribing for >6 min. The Vercel function
+  // maxDuration is 300s (5 min); anything older almost certainly means the
+  // worker instance was killed mid-Gemini-call (deploy, OOM, eviction) and the
+  // row will never be touched again. Without this, the queue can deadlock
+  // because the inFlight check below sees a stuck row and skips forever.
+  const sixMinAgo = new Date(Date.now() - 6 * 60_000).toISOString();
+  const { data: swept, error: sweepErr } = await sb
+    .from("calls")
+    .update({
+      status: "pending",
+      processing_started_at: null,
+      error_message: "پردازش به دلیل قطع شدن سرور بازنشانی شد",
+    })
+    .in("status", ["analyzing", "transcribing"])
+    .lt("processing_started_at", sixMinAgo)
+    .select("id");
+  const sweptCount = swept?.length ?? 0;
+  if (sweepErr) {
+    console.warn("[processNextInline] sweep failed:", sweepErr.message);
+  } else if (sweptCount > 0) {
+    console.warn(`[processNextInline] swept ${sweptCount} stuck row(s) back to pending`);
+  }
 
   for (let i = 0; i < maxChain; i++) {
     // Don't claim if something else is already working.
@@ -188,14 +212,14 @@ export async function processNextInline(maxChain = 5): Promise<{
     if (countErr) throw new Error(countErr.message);
     if ((inFlight ?? 0) > 0) {
       console.log(`[processNextInline] skip — ${inFlight} already in flight`);
-      return { processed, transientStopped: false, drained: false };
+      return { processed, transientStopped: false, drained: false, swept: sweptCount };
     }
 
     const { data, error } = await sb.rpc("claim_next_call");
     if (error) throw new Error(error.message);
     const claimed = (data as Array<{ id: string; audio_path: string; original_filename: string | null }> | null)?.[0];
     if (!claimed) {
-      return { processed, transientStopped, drained: true };
+      return { processed, transientStopped, drained: true, swept: sweptCount };
     }
 
     console.log(`[processNextInline] processing ${claimed.id} inline`);
@@ -205,8 +229,8 @@ export async function processNextInline(maxChain = 5): Promise<{
     processed++;
     if (result.transient) {
       transientStopped = true;
-      return { processed, transientStopped, drained: false };
+      return { processed, transientStopped, drained: false, swept: sweptCount };
     }
   }
-  return { processed, transientStopped, drained: false };
+  return { processed, transientStopped, drained: false, swept: sweptCount };
 }

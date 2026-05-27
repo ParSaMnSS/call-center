@@ -548,45 +548,84 @@ function ProcessingPhaseLabel({ call }: { call: Call }) {
   return <span>{label}</span>;
 }
 
-// Cron runs every minute on the wall clock (`* * * * *`), so the next retry
-// fires at the next :00 second of the next minute.
-function secondsUntilNextCron(now = new Date()): number {
-  return 60 - now.getSeconds();
-}
-
 function AIBusyBanner() {
-  const [secondsLeft, setSecondsLeft] = useState(() => secondsUntilNextCron());
+  // Single source of truth: timestamp of the next scheduled retry. The visible
+  // countdown derives from this, AND it's what actually drives the fetch. So
+  // the timer hitting zero and the POST firing are literally the same event.
+  const RETRY_INTERVAL_MS = 60_000;
+  const FIRST_TICK_DELAY_MS = 5_000;
+
+  const [nextRetryAt, setNextRetryAt] = useState(() => Date.now() + FIRST_TICK_DELAY_MS);
+  const [secondsLeft, setSecondsLeft] = useState(() =>
+    Math.max(0, Math.ceil(FIRST_TICK_DELAY_MS / 1000))
+  );
+  const [autoRetrying, setAutoRetrying] = useState(false);
   const [manualRetrying, setManualRetrying] = useState(false);
   const toast = useToast();
 
+  // Tick the visible countdown once a second.
   useEffect(() => {
-    const tick = () => setSecondsLeft(secondsUntilNextCron());
-    tick();
-    const id = setInterval(tick, 1000);
+    const id = setInterval(() => {
+      const left = Math.max(0, Math.ceil((nextRetryAt - Date.now()) / 1000));
+      setSecondsLeft(left);
+    }, 250);
     return () => clearInterval(id);
-  }, []);
+  }, [nextRetryAt]);
 
-  const retryingNow = manualRetrying || secondsLeft <= 5;
-
-  async function handleRetryNow() {
-    if (manualRetrying) return;
-    setManualRetrying(true);
+  // Actual retry runner — used by both the auto-timer and the manual button.
+  // Reschedules nextRetryAt so the countdown restarts from 60 the moment the
+  // fetch resolves.
+  async function runRetry(viaManual: boolean) {
+    if (viaManual) setManualRetrying(true);
+    else setAutoRetrying(true);
     try {
       const res = await fetch("/api/retry-pending", { method: "POST" });
       const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        toast.show(body.error || "خطا در تلاش مجدد", "error");
-      } else if (body.processed > 0) {
-        toast.show("تحلیل از سر گرفته شد", "success");
-      } else if (body.transientStopped) {
-        toast.show("سرویس هنوز در دسترس نیست — به‌زودی دوباره تلاش می‌شود", "info");
-      } else {
-        toast.show("تماس قابل پردازشی پیدا نشد", "info");
+      if (viaManual) {
+        if (!res.ok) {
+          toast.show(body.error || "خطا در تلاش مجدد", "error");
+        } else if (body.processed > 0) {
+          toast.show("تحلیل از سر گرفته شد", "success");
+        } else if (body.transientStopped) {
+          toast.show("سرویس هنوز در دسترس نیست — به‌زودی دوباره تلاش می‌شود", "info");
+        } else {
+          toast.show("تماس قابل پردازشی پیدا نشد", "info");
+        }
       }
+    } catch {
+      // Network blip — let the next tick retry silently for auto.
+      if (viaManual) toast.show("خطا در تلاش مجدد", "error");
     } finally {
-      setManualRetrying(false);
+      if (viaManual) setManualRetrying(false);
+      else setAutoRetrying(false);
+      // Schedule the next auto tick.
+      setNextRetryAt(Date.now() + RETRY_INTERVAL_MS);
     }
   }
+
+  // Auto-run runRetry every time the countdown reaches zero. The dependency
+  // on nextRetryAt + the setNextRetryAt inside runRetry forms the cycle.
+  useEffect(() => {
+    const delay = Math.max(0, nextRetryAt - Date.now());
+    const id = setTimeout(() => {
+      // Don't double-run if the user just hit "Retry now" manually.
+      if (!manualRetrying && !autoRetrying) {
+        runRetry(false);
+      } else {
+        // Manual is in flight — push the next auto tick out one cycle.
+        setNextRetryAt(Date.now() + RETRY_INTERVAL_MS);
+      }
+    }, delay);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nextRetryAt]);
+
+  function handleRetryNow() {
+    if (manualRetrying || autoRetrying) return;
+    runRetry(true);
+  }
+
+  const retryingNow = manualRetrying || autoRetrying;
 
   return (
     <motion.div
