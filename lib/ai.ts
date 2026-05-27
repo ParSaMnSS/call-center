@@ -1,7 +1,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { z } from "zod";
 
-const MODEL = "gemini-2.5-flash";
+const MODEL = "gemini-2.5-flash-lite";
 
 // Lazy client: don't crash at module-eval time (e.g. during `next build` page
 // data collection) if the env var is missing. Throw only when actually used.
