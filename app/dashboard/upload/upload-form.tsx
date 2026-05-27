@@ -1,13 +1,14 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { uploadOneCall } from "./actions";
+import { AnimatePresence } from "framer-motion";
+import { Upload } from "lucide-react";
 import { useToast } from "@/components/toast";
+import { UploadProgressRow, type RowState } from "@/components/upload-progress-row";
 import { extractPhoneFromFilename } from "@/lib/phone";
-import { t } from "@/lib/strings";
-import { AnimatePresence, motion } from "framer-motion";
-import { Upload, Music, X, Loader2, CheckCircle2, XCircle } from "lucide-react";
+import { uploadDirect, type UploadHandle } from "@/lib/upload-direct";
+import { formatFaDuration, t } from "@/lib/strings";
 
 const MAX_BYTES = 20 * 1024 * 1024;
 
@@ -15,9 +16,9 @@ type Item = {
   key: string;
   file: File;
   phone: string | null;
-  status: "queued" | "uploading" | "done" | "error";
-  error?: string;
+  state: RowState;
   resultId?: string;
+  handle?: UploadHandle;
 };
 
 function newKey() { return Math.random().toString(36).slice(2); }
@@ -30,6 +31,14 @@ export function UploadForm() {
   const [uploading, setUploading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Batch ETA — recomputed every second while uploading.
+  const [, force] = useState(0);
+  useEffect(() => {
+    if (!uploading) return;
+    const id = setInterval(() => force((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [uploading]);
+
   function add(files: FileList | File[] | null) {
     if (!files) return;
     const incoming: Item[] = [];
@@ -39,10 +48,9 @@ export function UploadForm() {
         key: newKey(),
         file: f,
         phone: extractPhoneFromFilename(f.name),
-        status: "queued",
-        error: !valid
-          ? (f.size > MAX_BYTES ? t.fileTooLarge : t.invalidFileType)
-          : undefined,
+        state: valid
+          ? { kind: "queued" }
+          : { kind: "error", message: f.size > MAX_BYTES ? t.fileTooLarge : t.invalidFileType },
       });
     }
     setItems((prev) => [...prev, ...incoming]);
@@ -53,34 +61,45 @@ export function UploadForm() {
   }
 
   async function uploadAll() {
-    const queue = items.filter((i) => i.status === "queued" && !i.error);
+    const queue = items.filter((i) => i.state.kind === "queued");
     if (queue.length === 0) return;
     setUploading(true);
 
-    // Upload sequentially to keep server load + Supabase ordering predictable.
     let successCount = 0;
     let errorCount = 0;
     let firstId: string | undefined;
+
+    // Sequential — keeps things predictable for the worker queue + the toast log.
     for (const item of queue) {
-      setItems((prev) => prev.map((i) => i.key === item.key ? { ...i, status: "uploading" } : i));
-      const fd = new FormData();
-      fd.set("file", item.file);
-      const res = await uploadOneCall(fd);
+      const { handle, result } = uploadDirect({
+        file: item.file,
+        onProgress: (p) => {
+          setItems((prev) =>
+            prev.map((i) =>
+              i.key === item.key ? { ...i, state: { kind: "uploading", progress: p } } : i
+            )
+          );
+        },
+      });
+      // Stash the handle so the user can cancel.
+      setItems((prev) => prev.map((i) => i.key === item.key ? { ...i, handle } : i));
+
+      const res = await result;
       if (res.ok) {
         successCount++;
         if (!firstId) firstId = res.id;
-        setItems((prev) => prev.map((i) => i.key === item.key ? { ...i, status: "done", resultId: res.id } : i));
+        setItems((prev) =>
+          prev.map((i) => i.key === item.key ? { ...i, state: { kind: "done" }, resultId: res.id, handle: undefined } : i)
+        );
       } else {
         errorCount++;
-        setItems((prev) => prev.map((i) => i.key === item.key ? { ...i, status: "error", error: res.error } : i));
+        setItems((prev) =>
+          prev.map((i) => i.key === item.key ? { ...i, state: { kind: "error", message: res.error }, handle: undefined } : i)
+        );
       }
     }
 
     setUploading(false);
-
-    // Note: the worker kick now happens server-side inside uploadOneCall
-    // (via `after()`), so it survives the user navigating away. No client-side
-    // kick needed.
 
     if (successCount > 0 && errorCount === 0) {
       toast.show(successCount === 1 ? t.uploadSuccess : t.uploadSuccessMany(successCount), "success");
@@ -90,17 +109,22 @@ export function UploadForm() {
       toast.show(t.uploadError, "error");
     }
 
-    // If exactly one succeeded, jump to its detail page; otherwise stay so user sees the list.
     if (successCount === 1 && errorCount === 0 && firstId) {
       router.push(`/dashboard/calls/${firstId}`);
     } else if (successCount > 0) {
-      // Clear the successful items, keep errors visible
-      setItems((prev) => prev.filter((i) => i.status !== "done"));
+      setItems((prev) => prev.filter((i) => i.state.kind !== "done"));
     }
   }
 
-  const queueable = items.filter((i) => i.status === "queued" && !i.error).length;
+  const queueable = items.filter((i) => i.state.kind === "queued").length;
+  const uploadingCount = items.filter((i) => i.state.kind === "uploading").length;
+  const doneCount = items.filter((i) => i.state.kind === "done").length;
+  const errorCount = items.filter((i) => i.state.kind === "error").length;
+  const totalCount = items.length;
   const totalSize = items.reduce((s, i) => s + i.file.size, 0);
+
+  // Batch ETA: sum remaining bytes / aggregate throughput across in-flight uploads.
+  const batchEta = computeBatchEta(items);
 
   return (
     <div className="space-y-4">
@@ -139,52 +163,57 @@ export function UploadForm() {
       {/* File list */}
       {items.length > 0 && (
         <div className="panel divide-y divide-border">
-          <div className="flex items-center justify-between px-4 py-3">
+          <div className="flex items-center justify-between gap-3 px-4 py-3 flex-wrap">
             <div className="text-sm text-muted fa-nums">
-              {t.filesQueued(items.length)} · {(totalSize / (1024 * 1024)).toLocaleString("fa-IR", { maximumFractionDigits: 1 })} مگابایت
+              {uploading ? (
+                <>
+                  {t.uploadBatchProgress(doneCount, totalCount - errorCount)}
+                  {" · "}
+                  {(totalSize / (1024 * 1024)).toLocaleString("fa-IR", { maximumFractionDigits: 1 })} مگابایت
+                  {batchEta !== null && (
+                    <>
+                      {" · "}
+                      <span className="text-fg font-medium">
+                        {t.uploadBatchETA(formatFaDuration(batchEta))}
+                      </span>
+                    </>
+                  )}
+                </>
+              ) : (
+                <>
+                  {t.filesQueued(items.length)}
+                  {" · "}
+                  {(totalSize / (1024 * 1024)).toLocaleString("fa-IR", { maximumFractionDigits: 1 })} مگابایت
+                </>
+              )}
             </div>
-            <button
-              onClick={() => setItems([])}
-              disabled={uploading}
-              className="btn btn-ghost text-xs text-muted"
-            >
-              {t.removeAll}
-            </button>
+            {!uploading && (
+              <button
+                onClick={() => setItems([])}
+                disabled={uploading}
+                className="btn btn-ghost text-xs text-muted"
+              >
+                {t.removeAll}
+              </button>
+            )}
+            {uploading && uploadingCount > 0 && (
+              <span className="text-xs text-muted">
+                {uploadingCount.toLocaleString("fa-IR")} {" در حال بارگذاری"}
+              </span>
+            )}
           </div>
           <ul>
             <AnimatePresence initial={false}>
               {items.map((it) => (
-                <motion.li
+                <UploadProgressRow
                   key={it.key}
-                  layout
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, x: -10 }}
-                  transition={{ duration: 0.18, ease: [0.22, 0.61, 0.36, 1] }}
-                  className="px-4 py-3 flex items-center gap-3 border-b border-border last:border-b-0"
-                >
-                  <FileIcon />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm truncate text-fg">{it.file.name}</div>
-                    <div className="text-xs text-muted fa-nums mt-0.5 flex items-center gap-2 flex-wrap">
-                      <span>{(it.file.size / (1024 * 1024)).toLocaleString("fa-IR", { maximumFractionDigits: 2 })} مگابایت</span>
-                      {it.phone && (
-                        <span className="badge" dir="ltr">{it.phone}</span>
-                      )}
-                    </div>
-                  </div>
-                  <ItemStatus item={it} />
-                  {it.status !== "uploading" && (
-                    <button
-                      onClick={() => remove(it.key)}
-                      disabled={uploading}
-                      className="btn btn-ghost text-muted px-2"
-                      aria-label="حذف"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  )}
-                </motion.li>
+                  filename={it.file.name}
+                  sizeBytes={it.file.size}
+                  phone={it.phone}
+                  state={it.state}
+                  removable={!uploading}
+                  onRemove={() => remove(it.key)}
+                />
               ))}
             </AnimatePresence>
           </ul>
@@ -212,39 +241,21 @@ export function UploadForm() {
   );
 }
 
-function FileIcon() {
-  return (
-    <div className="h-9 w-9 shrink-0 rounded-lg bg-surface2 flex items-center justify-center text-muted">
-      <Music className="w-4 h-4" />
-    </div>
-  );
-}
-
-function ItemStatus({ item }: { item: Item }) {
-  if (item.status === "queued") {
-    if (item.error) return <span className="badge badge-danger text-xs whitespace-nowrap">{item.error}</span>;
-    return <span className="badge text-xs">{t.status_queued}</span>;
+// Aggregate ETA across all in-flight uploads. Pretty rough — assumes the
+// remaining queued files will upload at the current average throughput.
+function computeBatchEta(items: Item[]): number | null {
+  let remainingBytes = 0;
+  let aggregateRate = 0;
+  let hasActive = false;
+  for (const it of items) {
+    if (it.state.kind === "uploading") {
+      remainingBytes += it.state.progress.total - it.state.progress.loaded;
+      aggregateRate += it.state.progress.bytesPerSec;
+      hasActive = true;
+    } else if (it.state.kind === "queued") {
+      remainingBytes += it.file.size;
+    }
   }
-  if (item.status === "uploading") {
-    return (
-      <span className="badge text-xs inline-flex items-center gap-1.5">
-        <Loader2 className="w-3 h-3 animate-spin" />
-        {t.status_uploading}
-      </span>
-    );
-  }
-  if (item.status === "done") {
-    return (
-      <span className="badge badge-success text-xs inline-flex items-center gap-1">
-        <CheckCircle2 className="w-3 h-3" />
-        {t.status_done}
-      </span>
-    );
-  }
-  return (
-    <span className="badge badge-danger text-xs inline-flex items-center gap-1">
-      <XCircle className="w-3 h-3" />
-      {item.error || t.status_error}
-    </span>
-  );
+  if (!hasActive || aggregateRate <= 0) return null;
+  return Math.max(1, Math.round(remainingBytes / aggregateRate));
 }

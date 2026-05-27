@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState, useTransition } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { useRealtimeCalls } from "@/lib/realtime-context";
 import type { Call, Sentiment } from "@/lib/supabase/types";
 import { StatusBadge } from "@/components/status-badge";
 import { SentimentDot } from "@/components/sentiment-dot";
@@ -14,7 +14,11 @@ import { useConfirm } from "@/components/confirm-dialog";
 import { QueueInfo, medianProcessingSeconds } from "@/components/queue-info";
 import { formatFaDuration } from "@/lib/strings";
 import { FadeIn, motion } from "@/components/motion";
-import { Trash2, Loader2, Play, StopCircle, AlertTriangle, Mic, Search, SlidersHorizontal } from "lucide-react";
+import { Select } from "@/components/select";
+import { Segmented } from "@/components/segmented";
+import { DateField } from "@/components/date-field";
+import { AnimatePresence } from "framer-motion";
+import { Trash2, Loader2, Play, StopCircle, AlertTriangle, Mic, Search, SlidersHorizontal, X, RotateCcw } from "lucide-react";
 
 type ResolvedFilter = "all" | "yes" | "no";
 type SentimentFilter = "all" | Sentiment;
@@ -42,39 +46,18 @@ export function CallsView({ initial }: { initial: Call[] }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Realtime subscription
-  useEffect(() => {
-    const sb = createClient();
-    const channel = sb
-      .channel("calls-changes")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "calls" },
-        (payload) => {
-          setCalls((prev) => {
-            if (payload.eventType === "INSERT") {
-              const row = payload.new as Call;
-              if (prev.some((c) => c.id === row.id)) return prev;
-              return [row, ...prev];
-            }
-            if (payload.eventType === "UPDATE") {
-              const row = payload.new as Call;
-              return prev.map((c) => (c.id === row.id ? { ...c, ...row } : c));
-            }
-            if (payload.eventType === "DELETE") {
-              const old = payload.old as { id: string };
-              return prev.filter((c) => c.id !== old.id);
-            }
-            return prev;
-          });
-        }
-      )
-      .subscribe();
-
-    return () => {
-      sb.removeChannel(channel);
-    };
-  }, []);
+  // Realtime updates via the shared dashboard channel.
+  useRealtimeCalls({
+    onInsert: (row) => {
+      setCalls((prev) => prev.some((c) => c.id === row.id) ? prev : [row, ...prev]);
+    },
+    onUpdate: (row) => {
+      setCalls((prev) => prev.map((c) => (c.id === row.id ? { ...c, ...row } : c)));
+    },
+    onDelete: (row) => {
+      setCalls((prev) => prev.filter((c) => c.id !== row.id));
+    },
+  });
 
   const agents = useMemo(() => {
     const s = new Set<string>();
@@ -121,6 +104,13 @@ export function CallsView({ initial }: { initial: Call[] }) {
   }
 
   const anyFilter = !!(search || agent || category || from || to || resolvedF !== "all" || sentF !== "all");
+  const filterCount =
+    (agent ? 1 : 0) +
+    (category ? 1 : 0) +
+    (from ? 1 : 0) +
+    (to ? 1 : 0) +
+    (resolvedF !== "all" ? 1 : 0) +
+    (sentF !== "all" ? 1 : 0);
 
   const medianSec = useMemo(() => medianProcessingSeconds(calls), [calls]);
 
@@ -157,84 +147,138 @@ export function CallsView({ initial }: { initial: Call[] }) {
         />
       )}
 
-      {/* Search + filter toggle */}
-      <div className="panel p-3 md:p-4">
+      {/* Search bar */}
+      <div className="panel p-2 md:p-2.5">
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
+            <Search className="absolute inset-y-0 start-3 my-auto w-4 h-4 text-muted pointer-events-none" />
             <input
               type="text"
-              className="input ps-10"
+              className="input ps-10 pe-3"
               placeholder={t.search}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
-            <Search className="absolute inset-y-0 start-3 my-auto w-4 h-4 text-muted pointer-events-none" />
+            {search && (
+              <button
+                onClick={() => setSearch("")}
+                className="absolute inset-y-0 end-2 my-auto w-7 h-7 rounded-md text-muted hover:text-fg hover:bg-surface2 transition-colors inline-flex items-center justify-center"
+                aria-label="پاک کردن"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
           <button
             onClick={() => setShowFilters((v) => !v)}
-            className={"btn text-sm whitespace-nowrap " + (showFilters || anyFilter ? "" : "btn-ghost")}
+            className={"btn text-sm whitespace-nowrap " + (showFilters || anyFilter ? "btn-primary" : "")}
+            aria-expanded={showFilters}
           >
             <SlidersHorizontal className="w-4 h-4" />
-            {t.filters}
+            <span>{t.filters}</span>
             {anyFilter && (
-              <span className="ms-1 inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 rounded-full bg-fg text-white text-[10px] font-bold fa-nums">
-                {[agent, category, from, to].filter(Boolean).length + (resolvedF !== "all" ? 1 : 0) + (sentF !== "all" ? 1 : 0)}
+              <span className={
+                "ms-1 inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 rounded-full text-[10px] font-bold fa-nums " +
+                (showFilters || anyFilter ? "bg-surface text-fg" : "bg-fg text-surface")
+              }>
+                {filterCount}
               </span>
             )}
           </button>
         </div>
-
-        {showFilters && (
-          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            <div>
-              <label className="text-xs text-muted mb-1 block">{t.fromDate}</label>
-              <input type="date" className="input fa-nums" value={from} onChange={(e) => setFrom(e.target.value)} />
-            </div>
-            <div>
-              <label className="text-xs text-muted mb-1 block">{t.toDate}</label>
-              <input type="date" className="input fa-nums" value={to} onChange={(e) => setTo(e.target.value)} />
-            </div>
-            <div>
-              <label className="text-xs text-muted mb-1 block">{t.agent}</label>
-              <select className="input" value={agent} onChange={(e) => setAgent(e.target.value)}>
-                <option value="">{t.allAgents}</option>
-                {agents.map((a) => <option key={a} value={a}>{a}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="text-xs text-muted mb-1 block">{t.category}</label>
-              <select className="input" value={category} onChange={(e) => setCategory(e.target.value)}>
-                <option value="">{t.allCategories}</option>
-                {categories.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="text-xs text-muted mb-1 block">{t.resolvedFilter}</label>
-              <select className="input" value={resolvedF} onChange={(e) => setResolvedF(e.target.value as ResolvedFilter)}>
-                <option value="all">{t.allStatuses}</option>
-                <option value="yes">{t.resolvedOnly}</option>
-                <option value="no">{t.unresolvedOnly}</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-xs text-muted mb-1 block">{t.sentiment}</label>
-              <select className="input" value={sentF} onChange={(e) => setSentF(e.target.value as SentimentFilter)}>
-                <option value="all">{t.allSentiments}</option>
-                <option value="positive">{t.positive}</option>
-                <option value="neutral">{t.neutral}</option>
-                <option value="negative">{t.negative}</option>
-              </select>
-            </div>
-            {anyFilter && (
-              <div className="md:col-span-2 lg:col-span-3 flex justify-end">
-                <button onClick={clearFilters} className="btn btn-ghost text-xs text-muted">
-                  {t.clearFilters}
-                </button>
-              </div>
-            )}
-          </div>
-        )}
       </div>
+
+      {/* Filters panel */}
+      <AnimatePresence initial={false}>
+        {showFilters && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.22, ease: [0.22, 0.61, 0.36, 1] }}
+            className="overflow-hidden"
+          >
+            <div className="panel p-5 md:p-6">
+              <div className="flex items-center justify-between mb-5">
+                <div className="text-xs font-semibold text-muted uppercase tracking-wide">
+                  {t.filters}
+                </div>
+                {anyFilter && (
+                  <button
+                    onClick={clearFilters}
+                    className="text-xs text-muted hover:text-fg transition-colors inline-flex items-center gap-1.5"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    {t.clearFilters}
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-5 gap-y-5">
+                {/* Date range — own row */}
+                <FilterGroup label={t.fromDate}>
+                  <DateField value={from} onChange={setFrom} placeholder={t.fromDate} max={to || undefined} />
+                </FilterGroup>
+                <FilterGroup label={t.toDate}>
+                  <DateField value={to} onChange={setTo} placeholder={t.toDate} min={from || undefined} />
+                </FilterGroup>
+
+                {/* Agent + category dropdowns */}
+                <FilterGroup label={t.agent}>
+                  <Select
+                    value={agent}
+                    onChange={setAgent}
+                    placeholder={t.allAgents}
+                    options={[
+                      { value: "", label: t.allAgents },
+                      ...agents.map((a) => ({ value: a, label: a })),
+                    ]}
+                  />
+                </FilterGroup>
+                <FilterGroup label={t.category}>
+                  <Select
+                    value={category}
+                    onChange={setCategory}
+                    placeholder={t.allCategories}
+                    options={[
+                      { value: "", label: t.allCategories },
+                      ...categories.map((c) => ({ value: c, label: c })),
+                    ]}
+                  />
+                </FilterGroup>
+              </div>
+
+              {/* Segmented controls — full width with their own row */}
+              <div className="mt-5 pt-5 border-t border-border space-y-4">
+                <FilterGroup label={t.resolvedFilter} inline>
+                  <Segmented<ResolvedFilter>
+                    value={resolvedF}
+                    onChange={setResolvedF}
+                    options={[
+                      { value: "all", label: t.allStatuses },
+                      { value: "yes", label: t.resolvedOnly },
+                      { value: "no", label: t.unresolvedOnly },
+                    ]}
+                  />
+                </FilterGroup>
+
+                <FilterGroup label={t.sentiment} inline>
+                  <Segmented<SentimentFilter>
+                    value={sentF}
+                    onChange={setSentF}
+                    options={[
+                      { value: "all", label: t.allSentiments },
+                      { value: "positive", label: t.positive },
+                      { value: "neutral", label: t.neutral },
+                      { value: "negative", label: t.negative },
+                    ]}
+                  />
+                </FilterGroup>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Empty state */}
       {filtered.length === 0 ? (
@@ -376,6 +420,7 @@ function CallRow({
   onDeleted: (id: string) => void;
 }) {
   const showQueue = c.status === "pending" || c.status === "analyzing" || c.status === "transcribing";
+  const isFailed = c.status === "failed";
   return (
     <tr>
       <td>
@@ -401,6 +446,11 @@ function CallRow({
           <div className="text-sm line-clamp-2 max-w-[420px] leading-6">
             {c.issue_summary || (c.status !== "done" ? <span className="text-muted">…</span> : <span className="text-muted">{t.unknown}</span>)}
           </div>
+          {isFailed && c.error_message && (
+            <div className="text-xs text-red-700 mt-1 line-clamp-2 max-w-[420px]" title={c.error_message}>
+              {c.error_message}
+            </div>
+          )}
         </Link>
       </td>
       <td>
@@ -426,13 +476,76 @@ function CallRow({
           {showQueue && (
             <QueueInfo call={c} allCalls={allCalls} medianSec={medianSec} variant="compact" />
           )}
+          {c.status === "analyzing" && (
+            <div className="text-[11px] text-muted leading-tight">
+              <ProcessingPhaseLabel call={c} />
+            </div>
+          )}
         </Link>
       </td>
       <td className="text-left whitespace-nowrap">
-        <DeleteButton id={c.id} onDeleted={onDeleted} />
+        <div className="inline-flex items-center gap-1">
+          {isFailed && <InlineRetryButton id={c.id} />}
+          <DeleteButton id={c.id} onDeleted={onDeleted} />
+        </div>
       </td>
     </tr>
   );
+}
+
+// Quick-retry icon button for failed rows. Hits the existing
+// /api/process/[id] endpoint that the detail page already uses.
+function InlineRetryButton({ id }: { id: string }) {
+  const [pending, setPending] = useState(false);
+  const toast = useToast();
+
+  async function handle(e: React.MouseEvent) {
+    e.stopPropagation();
+    e.preventDefault();
+    if (pending) return;
+    setPending(true);
+    try {
+      const res = await fetch(`/api/process/${id}`, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        toast.show(body.error || "خطا در تلاش مجدد", "error");
+      } else {
+        toast.show("تحلیل مجدد آغاز شد", "info");
+      }
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <button
+      onClick={handle}
+      disabled={pending}
+      title={t.inlineRetry}
+      aria-label={t.inlineRetry}
+      className="btn btn-ghost text-muted hover:text-fg inline-flex items-center justify-center px-2 py-1.5"
+    >
+      {pending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+    </button>
+  );
+}
+
+// Heuristic phase label derived from processing_started_at. 0-3s = downloading
+// audio, 3s+ = sending/awaiting AI, last 2s (if median known) = finalizing.
+function ProcessingPhaseLabel({ call }: { call: Call }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const started = call.processing_started_at ? new Date(call.processing_started_at).getTime() : now;
+  const elapsedSec = Math.max(0, (now - started) / 1000);
+
+  const label =
+    elapsedSec < 3 ? t.phaseDownloading :
+    t.phaseAnalyzing;
+
+  return <span>{label}</span>;
 }
 
 // Cron runs every minute on the wall clock (`* * * * *`), so the next retry
@@ -527,6 +640,29 @@ function AIBusyBanner() {
   );
 }
 
+function FilterGroup({
+  label, inline, children,
+}: {
+  label: string;
+  inline?: boolean;
+  children: React.ReactNode;
+}) {
+  if (inline) {
+    return (
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <label className="text-xs font-medium text-muted">{label}</label>
+        <div>{children}</div>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <label className="text-xs font-medium text-muted mb-1.5 block">{label}</label>
+      {children}
+    </div>
+  );
+}
+
 function BulkActionsBar({
   failedCount, processingCount,
 }: {
@@ -579,7 +715,7 @@ function BulkActionsBar({
           className="btn btn-primary text-sm inline-flex items-center gap-1.5"
         >
           {retrying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-          <span>{t.retryAllFailed(failedCount)}</span>
+          <span>{retrying ? t.queuedShort : t.retryAllFailed(failedCount)}</span>
         </button>
       )}
       {processingCount > 0 && (
@@ -589,7 +725,7 @@ function BulkActionsBar({
           className="btn btn-danger text-sm inline-flex items-center gap-1.5"
         >
           {stopping ? <Loader2 className="w-4 h-4 animate-spin" /> : <StopCircle className="w-4 h-4" />}
-          <span>{t.stopAllProcessing(processingCount)}</span>
+          <span>{stopping ? t.queuedShort : t.stopAllProcessing(processingCount)}</span>
         </button>
       )}
     </div>
@@ -605,6 +741,7 @@ function CallCard({
   onDeleted: (id: string) => void;
 }) {
   const showQueue = c.status === "pending" || c.status === "analyzing" || c.status === "transcribing";
+  const isFailed = c.status === "failed";
   return (
     <Link href={`/dashboard/calls/${c.id}`} className="block panel p-4 active:bg-surface2 transition-colors">
       <div className="flex items-start justify-between gap-3">
@@ -616,6 +753,11 @@ function CallCard({
           {showQueue && (
             <div className="mt-2">
               <QueueInfo call={c} allCalls={allCalls} medianSec={medianSec} variant="compact" />
+              {c.status === "analyzing" && (
+                <div className="text-[11px] text-muted leading-tight mt-0.5">
+                  <ProcessingPhaseLabel call={c} />
+                </div>
+              )}
             </div>
           )}
           <div className="mt-2 font-semibold text-sm">
@@ -628,11 +770,20 @@ function CallCard({
             {c.agent_name ? `کارشناس: ${c.agent_name}` : null}
           </div>
         </div>
-        <DeleteButton id={c.id} onDeleted={onDeleted} />
+        <div className="flex items-center gap-1">
+          {isFailed && <InlineRetryButton id={c.id} />}
+          <DeleteButton id={c.id} onDeleted={onDeleted} />
+        </div>
       </div>
 
       {c.issue_summary && (
         <div className="text-sm mt-3 leading-7 line-clamp-2">{c.issue_summary}</div>
+      )}
+
+      {isFailed && c.error_message && (
+        <div className="text-xs text-red-700 mt-2 line-clamp-2 leading-5">
+          {c.error_message}
+        </div>
       )}
 
       <div className="mt-3 flex items-center gap-2 flex-wrap">

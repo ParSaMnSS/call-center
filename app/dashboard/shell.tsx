@@ -7,6 +7,8 @@ import { Menu } from "lucide-react";
 import { LogoutButton } from "./logout-button";
 import { ToastProvider } from "@/components/toast";
 import { ConfirmProvider } from "@/components/confirm-dialog";
+import { ConnectionIndicator } from "@/components/connection-indicator";
+import { RealtimeProvider } from "@/lib/realtime-context";
 import { t } from "@/lib/strings";
 
 export function Shell({ children, email }: { children: React.ReactNode; email: string | null }) {
@@ -55,8 +57,9 @@ export function Shell({ children, email }: { children: React.ReactNode; email: s
           );
         })}
       </nav>
-      <div className="p-3 border-t border-border">
-        {email && <div className="text-xs text-muted mb-2 truncate" dir="ltr">{email}</div>}
+      <div className="p-3 border-t border-border space-y-2">
+        <ConnectionIndicator />
+        {email && <div className="text-xs text-muted truncate px-2" dir="ltr">{email}</div>}
         <LogoutButton />
       </div>
     </aside>
@@ -65,6 +68,7 @@ export function Shell({ children, email }: { children: React.ReactNode; email: s
   return (
     <ToastProvider>
       <ConfirmProvider>
+        <RealtimeProvider>
         <div className="min-h-screen flex">
           {/* Desktop sidebar */}
           <div className="hidden md:block sticky top-0 self-start">{Sidebar}</div>
@@ -99,6 +103,7 @@ export function Shell({ children, email }: { children: React.ReactNode; email: s
             <div className="max-w-7xl mx-auto px-4 py-5 md:p-8">{children}</div>
           </main>
         </div>
+        </RealtimeProvider>
       </ConfirmProvider>
     </ToastProvider>
   );

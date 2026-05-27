@@ -171,6 +171,41 @@ export const t = {
   aiBusyNextRetry: (mmss: string) => `تلاش بعدی تا ${mmss} دیگر`,
   aiBusyRetryingNow: "در حال تلاش مجدد…",
   aiBusyRetryNow: "تلاش مجدد فوری",
+
+  // Realtime / connection
+  connectionLive: "اتصال زنده",
+  connectionLost: "اتصال قطع شد",
+  connectionReconnecting: "در حال اتصال…",
+  connectionLostToast: "اتصال زنده قطع شد — به‌روزرسانی‌ها متوقف شده‌اند",
+  connectionRestoredToast: "اتصال زنده برقرار شد",
+  lastSync: (mmss: string) => `آخرین به‌روزرسانی: ${mmss} پیش`,
+  justNow: "همین حالا",
+
+  // Processing phases (derived from elapsed time)
+  phaseDownloading: "در حال دانلود فایل صوتی…",
+  phaseAnalyzing: "در حال تحلیل با هوش مصنوعی…",
+  phaseFinalizing: "در حال نهایی‌سازی…",
+
+  // Upload progress
+  uploadingProgress: (percent: number, throughput: string) =>
+    `${percent.toLocaleString("fa-IR")}٪ · ${throughput}`,
+  uploadBatchETA: (mmss: string) => `زمان باقی‌مانده: ${mmss}`,
+  uploadBatchProgress: (done: number, total: number) =>
+    `${done.toLocaleString("fa-IR")} از ${total.toLocaleString("fa-IR")} بارگذاری شد`,
+  throughputKbps: (kb: number) => `${kb.toLocaleString("fa-IR", { maximumFractionDigits: 0 })} ک‌ب/ث`,
+  throughputMbps: (mb: number) => `${mb.toLocaleString("fa-IR", { maximumFractionDigits: 1 })} م‌ب/ث`,
+
+  // Background notifications
+  notifyCallDone: (name: string) =>
+    name ? `تحلیل تماس «${name}» کامل شد` : "تحلیل تماس کامل شد",
+  notifyCallFailed: (name: string) =>
+    name ? `تحلیل تماس «${name}» با خطا متوقف شد` : "تحلیل با خطا متوقف شد",
+  notifyAIRecovered: "سرویس هوش مصنوعی بازگشت — صف از سر گرفته شد",
+
+  // Inline actions
+  inlineRetry: "تلاش مجدد",
+  queuedShort: "در صف…",
+  pendingShort: "در حال انجام…",
 } as const;
 
 export function statusLabel(s: string): string {

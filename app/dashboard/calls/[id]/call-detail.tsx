@@ -3,6 +3,7 @@
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { useRealtimeCalls } from "@/lib/realtime-context";
 import type { Call } from "@/lib/supabase/types";
 import { StatusBadge } from "@/components/status-badge";
 import { SentimentDot } from "@/components/sentiment-dot";
@@ -35,44 +36,38 @@ export function CallDetail({ initial, audioUrl }: { initial: Call; audioUrl: str
   const [cancelling, startCancel] = useTransition();
   const [deleting, startDelete] = useTransition();
 
+  // One-shot fetch of queue context (pending + processing + recent done) so
+  // QueueInfo can compute position + median ETA. Realtime updates below keep
+  // it fresh — no per-page channel needed.
   useEffect(() => {
     const sb = createClient();
-
-    // Watch THIS call for live updates.
-    const callChannel = sb
-      .channel(`call-${call.id}`)
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "calls", filter: `id=eq.${call.id}` },
-        (payload) => { setCall((prev) => ({ ...prev, ...(payload.new as Call) })); }
-      )
-      .subscribe();
-
-    // Fetch queue context (pending + processing + recent done) — enough for
-    // QueueInfo to compute position and median ETA. Refresh on any change.
-    async function refreshQueue() {
+    let cancelled = false;
+    (async () => {
       const { data } = await sb
         .from("calls")
         .select("*")
         .or("status.eq.pending,status.eq.analyzing,status.eq.transcribing,status.eq.done")
         .order("created_at", { ascending: false })
         .limit(100);
-      if (data) setQueueCalls(data as Call[]);
-    }
-    refreshQueue();
+      if (!cancelled && data) setQueueCalls(data as Call[]);
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
-    const queueChannel = sb
-      .channel("call-detail-queue")
-      .on("postgres_changes", { event: "*", schema: "public", table: "calls" }, () => {
-        refreshQueue();
-      })
-      .subscribe();
-
-    return () => {
-      sb.removeChannel(callChannel);
-      sb.removeChannel(queueChannel);
-    };
-  }, [call.id]);
+  // Realtime updates via the shared dashboard channel. Updates this call AND
+  // keeps the queueCalls list in sync so position/ETA stay accurate.
+  useRealtimeCalls({
+    onInsert: (row) => {
+      setQueueCalls((prev) => prev.some((c) => c.id === row.id) ? prev : [row, ...prev]);
+    },
+    onUpdate: (row) => {
+      if (row.id === call.id) setCall((prev) => ({ ...prev, ...row }));
+      setQueueCalls((prev) => prev.map((c) => (c.id === row.id ? { ...c, ...row } : c)));
+    },
+    onDelete: (row) => {
+      setQueueCalls((prev) => prev.filter((c) => c.id !== row.id));
+    },
+  });
 
   const medianSec = medianProcessingSeconds(queueCalls);
   // Make sure THIS call is in queueCalls so position math works even before refresh lands.
@@ -165,9 +160,14 @@ export function CallDetail({ initial, audioUrl }: { initial: Call; audioUrl: str
         {isProcessing && (
           <div className="mt-4 space-y-3">
             {call.status !== "pending" && (
-              <div className="h-1 w-full bg-surface2 rounded overflow-hidden">
-                <div className="h-full w-1/2 bg-fg animate-pulse" />
-              </div>
+              <>
+                <div className="h-1 w-full bg-surface2 rounded overflow-hidden">
+                  <div className="h-full w-1/2 bg-fg animate-pulse" />
+                </div>
+                <div className="text-xs text-muted">
+                  <DetailPhaseLabel call={call} />
+                </div>
+              </>
             )}
             <QueueInfo call={call} allCalls={mergedQueue} medianSec={medianSec} variant="full" />
           </div>
@@ -303,4 +303,21 @@ function Field({
       </dd>
     </div>
   );
+}
+
+// Phase hint derived from elapsed time since processing_started_at.
+// 0–3s: downloading the audio. 3s+: analyzing with AI. (Heuristic; we don't
+// have a real phase column on the row.)
+function DetailPhaseLabel({ call }: { call: Call }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const started = call.processing_started_at
+    ? new Date(call.processing_started_at).getTime()
+    : now;
+  const elapsedSec = Math.max(0, (now - started) / 1000);
+  const label = elapsedSec < 3 ? t.phaseDownloading : t.phaseAnalyzing;
+  return <span>{label}</span>;
 }
