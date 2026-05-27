@@ -3,16 +3,36 @@ import { z } from "zod";
 
 const MODEL = "gemini-2.5-flash-lite";
 
+const PROJECT = process.env.GOOGLE_CLOUD_PROJECT ?? "gen-lang-client-0324926987";
+const LOCATION = process.env.GOOGLE_CLOUD_LOCATION ?? "us-central1";
+
 // Lazy client: don't crash at module-eval time (e.g. during `next build` page
 // data collection) if the env var is missing. Throw only when actually used.
 let _client: GoogleGenAI | null = null;
 function client(): GoogleGenAI {
   if (_client) return _client;
-  const apiKey = process.env.GOOGLE_API_KEY;
-  if (!apiKey) {
-    throw new Error("متغیر محیطی GOOGLE_API_KEY تنظیم نشده است");
+
+  const inlineJson = process.env.GOOGLE_CREDENTIALS_JSON;
+  const credFile = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+
+  if (!inlineJson && !credFile) {
+    throw new Error(
+      "احراز هویت Vertex AI تنظیم نشده است: GOOGLE_CREDENTIALS_JSON (در Vercel) یا GOOGLE_APPLICATION_CREDENTIALS (لوکال) را تنظیم کنید."
+    );
   }
-  _client = new GoogleGenAI({ apiKey });
+
+  const opts: ConstructorParameters<typeof GoogleGenAI>[0] = {
+    vertexai: true,
+    project: PROJECT,
+    location: LOCATION,
+  };
+
+  if (inlineJson) {
+    const credentials = JSON.parse(inlineJson);
+    opts.googleAuthOptions = { credentials };
+  }
+
+  _client = new GoogleGenAI(opts);
   return _client;
 }
 
