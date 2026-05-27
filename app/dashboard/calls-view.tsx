@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRealtimeCalls } from "@/lib/realtime-context";
 import type { Call, Sentiment } from "@/lib/supabase/types";
 import { StatusBadge } from "@/components/status-badge";
@@ -126,6 +126,17 @@ export function CallsView({ initial }: { initial: Call[] }) {
     () => calls.some((c) => c.status === "pending" && c.error_message),
     [calls],
   );
+  // Surface the actual error + how many rows are stuck behind it so the
+  // banner can show the real problem instead of a generic "busy" message.
+  const stuckCount = useMemo(
+    () => calls.filter((c) => c.status === "pending" && c.error_message).length,
+    [calls],
+  );
+  const latestErrorMessage = useMemo(() => {
+    const stuck = calls.filter((c) => c.status === "pending" && c.error_message);
+    if (stuck.length === 0) return null;
+    return stuck[0].error_message;
+  }, [calls]);
 
   return (
     <FadeIn className="space-y-4">
@@ -139,7 +150,7 @@ export function CallsView({ initial }: { initial: Call[] }) {
         </Link>
       </div>
 
-      {aiBusy && <AIBusyBanner />}
+      {aiBusy && <AIBusyBanner stuckCount={stuckCount} latestErrorMessage={latestErrorMessage} />}
       {(failedCount > 0 || processingCount > 0) && (
         <BulkActionsBar
           failedCount={failedCount}
@@ -548,84 +559,131 @@ function ProcessingPhaseLabel({ call }: { call: Call }) {
   return <span>{label}</span>;
 }
 
-function AIBusyBanner() {
-  // Single source of truth: timestamp of the next scheduled retry. The visible
-  // countdown derives from this, AND it's what actually drives the fetch. So
-  // the timer hitting zero and the POST firing are literally the same event.
+type RetryResult = {
+  ok: boolean;
+  processed: number;
+  transientStopped: boolean;
+  drained: boolean;
+  swept: number;
+  error?: string;
+};
+
+function AIBusyBanner({
+  stuckCount,
+  latestErrorMessage,
+}: {
+  stuckCount: number;
+  latestErrorMessage: string | null;
+}) {
   const RETRY_INTERVAL_MS = 60_000;
   const FIRST_TICK_DELAY_MS = 5_000;
-
-  const [nextRetryAt, setNextRetryAt] = useState(() => Date.now() + FIRST_TICK_DELAY_MS);
-  const [secondsLeft, setSecondsLeft] = useState(() =>
-    Math.max(0, Math.ceil(FIRST_TICK_DELAY_MS / 1000))
-  );
-  const [autoRetrying, setAutoRetrying] = useState(false);
-  const [manualRetrying, setManualRetrying] = useState(false);
   const toast = useToast();
 
-  // Tick the visible countdown once a second.
-  useEffect(() => {
-    const id = setInterval(() => {
-      const left = Math.max(0, Math.ceil((nextRetryAt - Date.now()) / 1000));
-      setSecondsLeft(left);
-    }, 250);
-    return () => clearInterval(id);
-  }, [nextRetryAt]);
+  // Ref-based scheduler — no React effect cycle, no state-update races. Each
+  // tick schedules the next one in its own .finally(), so we always have
+  // exactly one pending timeout in flight.
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inFlightRef = useRef(false);
+  const nextAtRef = useRef(Date.now() + FIRST_TICK_DELAY_MS);
 
-  // Actual retry runner — used by both the auto-timer and the manual button.
-  // Reschedules nextRetryAt so the countdown restarts from 60 the moment the
-  // fetch resolves.
-  async function runRetry(viaManual: boolean) {
-    if (viaManual) setManualRetrying(true);
-    else setAutoRetrying(true);
+  // UI state (separate from the timer — purely display).
+  const [secondsLeft, setSecondsLeft] = useState(Math.ceil(FIRST_TICK_DELAY_MS / 1000));
+  const [running, setRunning] = useState(false);
+  const [lastResult, setLastResult] = useState<RetryResult | null>(null);
+  const [lastTickAt, setLastTickAt] = useState<number | null>(null);
+  const [tickCount, setTickCount] = useState(0);
+
+  async function doTick(viaManual: boolean) {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    setRunning(true);
+    let result: RetryResult | null = null;
     try {
       const res = await fetch("/api/retry-pending", { method: "POST" });
       const body = await res.json().catch(() => ({}));
+      result = {
+        ok: res.ok,
+        processed: Number(body.processed ?? 0),
+        transientStopped: Boolean(body.transientStopped),
+        drained: Boolean(body.drained),
+        swept: Number(body.swept ?? 0),
+        error: !res.ok ? (body.error || `HTTP ${res.status}`) : undefined,
+      };
+      setLastResult(result);
+      setLastTickAt(Date.now());
+      setTickCount((n) => n + 1);
+
       if (viaManual) {
-        if (!res.ok) {
-          toast.show(body.error || "خطا در تلاش مجدد", "error");
-        } else if (body.processed > 0) {
+        if (!result.ok) {
+          toast.show(result.error || "خطا در تلاش مجدد", "error");
+        } else if (result.processed > 0) {
           toast.show("تحلیل از سر گرفته شد", "success");
-        } else if (body.transientStopped) {
+        } else if (result.transientStopped) {
           toast.show("سرویس هنوز در دسترس نیست — به‌زودی دوباره تلاش می‌شود", "info");
-        } else {
+        } else if (result.drained) {
           toast.show("تماس قابل پردازشی پیدا نشد", "info");
+        } else {
+          toast.show("صف در حال پردازش است", "info");
         }
       }
-    } catch {
-      // Network blip — let the next tick retry silently for auto.
-      if (viaManual) toast.show("خطا در تلاش مجدد", "error");
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "خطای شبکه";
+      result = {
+        ok: false,
+        processed: 0,
+        transientStopped: false,
+        drained: false,
+        swept: 0,
+        error: message,
+      };
+      setLastResult(result);
+      setLastTickAt(Date.now());
+      setTickCount((n) => n + 1);
+      if (viaManual) toast.show(message, "error");
     } finally {
-      if (viaManual) setManualRetrying(false);
-      else setAutoRetrying(false);
+      inFlightRef.current = false;
+      setRunning(false);
       // Schedule the next auto tick.
-      setNextRetryAt(Date.now() + RETRY_INTERVAL_MS);
+      nextAtRef.current = Date.now() + RETRY_INTERVAL_MS;
+      scheduleNext();
     }
   }
 
-  // Auto-run runRetry every time the countdown reaches zero. The dependency
-  // on nextRetryAt + the setNextRetryAt inside runRetry forms the cycle.
-  useEffect(() => {
-    const delay = Math.max(0, nextRetryAt - Date.now());
-    const id = setTimeout(() => {
-      // Don't double-run if the user just hit "Retry now" manually.
-      if (!manualRetrying && !autoRetrying) {
-        runRetry(false);
-      } else {
-        // Manual is in flight — push the next auto tick out one cycle.
-        setNextRetryAt(Date.now() + RETRY_INTERVAL_MS);
-      }
-    }, delay);
-    return () => clearTimeout(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nextRetryAt]);
-
-  function handleRetryNow() {
-    if (manualRetrying || autoRetrying) return;
-    runRetry(true);
+  function scheduleNext() {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    const delay = Math.max(0, nextAtRef.current - Date.now());
+    timerRef.current = setTimeout(() => { doTick(false); }, delay);
   }
 
-  const retryingNow = manualRetrying || autoRetrying;
+  // Mount: kick the first tick after FIRST_TICK_DELAY_MS, then chain itself.
+  // Unmount: cancel pending timer.
+  useEffect(() => {
+    scheduleNext();
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Display-only countdown — recomputed every 500ms from the ref.
+  useEffect(() => {
+    const id = setInterval(() => {
+      const left = Math.max(0, Math.ceil((nextAtRef.current - Date.now()) / 1000));
+      setSecondsLeft(left);
+    }, 500);
+    return () => clearInterval(id);
+  }, []);
+
+  function handleRetryNow() {
+    if (inFlightRef.current) return;
+    // Cancel the pending auto-tick; doTick will reschedule a fresh one in its finally.
+    if (timerRef.current) clearTimeout(timerRef.current);
+    doTick(true);
+  }
+
+  const lastTickAgo = lastTickAt
+    ? Math.max(0, Math.floor((Date.now() - lastTickAt) / 1000))
+    : null;
 
   return (
     <motion.div
@@ -640,15 +698,38 @@ function AIBusyBanner() {
         <AlertTriangle className="w-5 h-5 text-amber-700" />
       </div>
       <div className="min-w-0 flex-1">
-        <div className="font-semibold text-base md:text-lg text-amber-900">
-          {t.aiBusyTitle}
+        <div className="flex items-baseline justify-between gap-3 flex-wrap">
+          <div className="font-semibold text-base md:text-lg text-amber-900">
+            {t.aiBusyTitle}
+          </div>
+          {stuckCount > 0 && (
+            <div className="text-xs text-amber-900/70 fa-nums">
+              {stuckCount.toLocaleString("fa-IR")} تماس در انتظار
+            </div>
+          )}
         </div>
         <div className="text-sm text-amber-900/80 mt-1 leading-7">
           {t.aiBusyBody}
         </div>
+
+        {/* The actual error message from the row — show inline so user
+            can see WHY (e.g. 503 UNAVAILABLE) instead of just a generic message. */}
+        {latestErrorMessage && (
+          <details className="mt-3 group">
+            <summary className="text-xs text-amber-900/80 cursor-pointer hover:text-amber-900 select-none inline-flex items-center gap-1">
+              <span className="group-open:hidden">مشاهده پیام خطا</span>
+              <span className="hidden group-open:inline">پنهان کردن پیام خطا</span>
+            </summary>
+            <div className="mt-2 text-xs text-amber-900 bg-white/60 border border-amber-200 rounded-md px-3 py-2 leading-6 break-words font-mono" dir="ltr">
+              {latestErrorMessage}
+            </div>
+          </details>
+        )}
+
+        {/* Timer + retry-now */}
         <div className="mt-3 flex items-center gap-2 flex-wrap">
           <div className="inline-flex items-center gap-2 rounded-lg bg-surface border border-amber-200 px-3 py-1.5">
-            {retryingNow ? (
+            {running ? (
               <>
                 <Loader2 className="w-4 h-4 text-amber-700 animate-spin" />
                 <span className="text-sm font-semibold text-amber-900">{t.aiBusyRetryingNow}</span>
@@ -667,16 +748,42 @@ function AIBusyBanner() {
           </div>
           <button
             onClick={handleRetryNow}
-            disabled={manualRetrying}
+            disabled={running}
             className="btn text-sm border-amber-300 bg-surface text-amber-900 hover:bg-amber-50 hover:border-amber-400"
           >
-            {manualRetrying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+            {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
             {t.aiBusyRetryNow}
           </button>
         </div>
+
+        {/* Diagnostic strip — what happened on the last tick. Confirms the
+            auto-retry is actually firing AND tells the user what the server
+            saw. Without this, "nothing happens" is invisible. */}
+        {lastResult && lastTickAt && (
+          <div className="mt-3 text-[11px] text-amber-900/70 fa-nums leading-5">
+            <span>
+              آخرین تلاش {lastTickAgo == null || lastTickAgo === 0 ? "همین حالا" : `${lastTickAgo.toLocaleString("fa-IR")} ثانیه پیش`}
+              {" · "}
+              <span className="text-amber-900 font-medium">
+                {lastResultSummary(lastResult)}
+              </span>
+              {" · "}
+              مجموع تلاش‌ها: {tickCount.toLocaleString("fa-IR")}
+            </span>
+          </div>
+        )}
       </div>
     </motion.div>
   );
+}
+
+function lastResultSummary(r: RetryResult): string {
+  if (!r.ok) return `خطا: ${r.error || "ناشناخته"}`;
+  if (r.processed > 0) return `${r.processed.toLocaleString("fa-IR")} تماس پردازش شد`;
+  if (r.swept > 0) return `${r.swept.toLocaleString("fa-IR")} تماس از حالت گیر بازنشانی شد`;
+  if (r.transientStopped) return "سرویس هنوز پاسخگو نیست";
+  if (r.drained) return "صف خالی است";
+  return "صف در حال پردازش است";
 }
 
 function FilterGroup({

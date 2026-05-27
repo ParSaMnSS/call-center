@@ -159,11 +159,19 @@ export function useRealtimeCalls(handlers: CallHandlers) {
   const handlersRef = useRef(handlers);
   handlersRef.current = handlers;
 
+  // Subscribe ONCE on mount. Depending on `ctx` here is a bug: ctx.value
+  // changes every time lastSyncAt updates (i.e. on every realtime event), so
+  // a [ctx] dep would tear down + rebuild the subscription on every event,
+  // potentially dropping intermediate updates. The subscribe function itself
+  // is stable, so a one-shot subscribe via ref capture is safe.
+  const subscribeRef = useRef(ctx.subscribe);
+  subscribeRef.current = ctx.subscribe;
+
   useEffect(() => {
-    return ctx.subscribe({
+    return subscribeRef.current({
       onInsert: (row) => handlersRef.current.onInsert?.(row),
       onUpdate: (row, prev) => handlersRef.current.onUpdate?.(row, prev),
       onDelete: (row) => handlersRef.current.onDelete?.(row),
     });
-  }, [ctx]);
+  }, []);
 }
