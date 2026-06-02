@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { claimAndProcessNext } from "@/lib/process";
+import type { Call } from "@/lib/supabase/types";
 import { revalidatePath } from "next/cache";
 
 export async function deleteCall(id: string): Promise<{ error?: string }> {
@@ -66,7 +67,7 @@ export async function cancelCall(id: string): Promise<{ error?: string }> {
 // Flip every failed call back to pending and kick the worker. Used by the
 // dashboard "Analyze all failed" button. Also clears any audio_path === 'pending'
 // guard issues since failed rows always have a real path by this point.
-export async function retryAllFailed(): Promise<{ count: number; error?: string }> {
+export async function retryAllFailed(): Promise<{ count: number; rows: Call[]; error?: string }> {
 	const sb = await createClient();
 
 	const { data, error } = await sb
@@ -77,9 +78,9 @@ export async function retryAllFailed(): Promise<{ count: number; error?: string 
 			error_message: null,
 		})
 		.eq("status", "failed")
-		.select("id");
+		.select("*");
 
-	if (error) return { count: 0, error: error.message };
+	if (error) return { count: 0, rows: [], error: error.message };
 
 	// Kick the serial worker (no-op if nothing pending).
 	try {
@@ -89,14 +90,14 @@ export async function retryAllFailed(): Promise<{ count: number; error?: string 
 	}
 
 	revalidatePath("/dashboard");
-	return { count: data?.length ?? 0 };
+	return { count: data?.length ?? 0, rows: (data as Call[]) ?? [] };
 }
 
 // Cancel every in-flight call (pending + analyzing + transcribing). Used by
 // the dashboard "Stop all" button. The currently-running Gemini call can't
 // actually be interrupted mid-flight, but processCall checks isAborted()
 // before writing results, so its output gets discarded.
-export async function cancelAllProcessing(): Promise<{ count: number; error?: string }> {
+export async function cancelAllProcessing(): Promise<{ count: number; rows: Call[]; error?: string }> {
 	const sb = await createClient();
 
 	const { data, error } = await sb
@@ -106,10 +107,10 @@ export async function cancelAllProcessing(): Promise<{ count: number; error?: st
 			error_message: "لغو دسته‌جمعی توسط کاربر",
 		})
 		.in("status", ["pending", "analyzing", "transcribing"])
-		.select("id");
+		.select("*");
 
-	if (error) return { count: 0, error: error.message };
+	if (error) return { count: 0, rows: [], error: error.message };
 
 	revalidatePath("/dashboard");
-	return { count: data?.length ?? 0 };
+	return { count: data?.length ?? 0, rows: (data as Call[]) ?? [] };
 }

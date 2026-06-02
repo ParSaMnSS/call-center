@@ -59,8 +59,24 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const sb = createClient();
+    let cancelled = false;
+    let channel: RealtimeChannel | null = null;
 
-    const channel: RealtimeChannel = sb
+    // The `calls` SELECT policy is scoped `to authenticated`. Supabase Realtime
+    // enforces RLS per-socket, so postgres_changes are silently dropped unless
+    // the socket carries the user's JWT. Set it BEFORE subscribing, and keep it
+    // fresh on token refresh — otherwise the channel reports SUBSCRIBED but no
+    // row deltas ever arrive.
+    const { data: authSub } = sb.auth.onAuthStateChange((_e, session) => {
+      sb.realtime.setAuth(session?.access_token ?? null);
+    });
+
+    async function init() {
+      const { data } = await sb.auth.getSession();
+      if (cancelled) return;
+      sb.realtime.setAuth(data.session?.access_token ?? null);
+
+      channel = sb
       .channel("calls-shared")
       .on(
         "postgres_changes",
@@ -134,9 +150,14 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
         aiBusyRef.current = false;
       }
     }
+    }
+
+    init();
 
     return () => {
-      sb.removeChannel(channel);
+      cancelled = true;
+      authSub.subscription.unsubscribe();
+      if (channel) sb.removeChannel(channel);
     };
     // toast.show is stable from context, ignore dep warning safely
     // eslint-disable-next-line react-hooks/exhaustive-deps
