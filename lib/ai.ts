@@ -205,8 +205,25 @@ export async function analyzeAudio(
           temperature: 0.2,
           responseMimeType: "application/json",
           responseSchema: RESPONSE_SCHEMA,
+          // Long calls produce large transcripts. Without an explicit cap the
+          // JSON gets truncated mid-string ("Unterminated string in JSON"),
+          // which JSON.parse can't recover from. Use the model's max output,
+          // and disable thinking so reasoning tokens don't eat that budget.
+          maxOutputTokens: 65536,
+          thinkingConfig: { thinkingBudget: 0 },
         },
       });
+
+      // If the model stopped because it ran out of output budget, the JSON is
+      // truncated and unparseable. Surface a clear error instead of a cryptic
+      // "Unterminated string in JSON". Treat as transient so the cron retries
+      // (a re-run may stay under budget, and headroom is now much larger).
+      const finishReason = response.candidates?.[0]?.finishReason;
+      if (finishReason === "MAX_TOKENS") {
+        throw new Error(
+          "TRUNCATED_RESPONSE: پاسخ مدل به دلیل طولانی بودن مکالمه ناقص بازگشت"
+        );
+      }
 
       const raw = response.text ?? "{}";
       // Empty response. Vertex occasionally returns this transiently
@@ -221,8 +238,8 @@ export async function analyzeAudio(
     } catch (e) {
       lastErr = e;
       const t = isTransient(e);
-      // Empty-response retries get folded into transient handling.
-      const isEmpty = e instanceof Error && /EMPTY_RESPONSE/.test(e.message);
+      // Empty- and truncated-response retries get folded into transient handling.
+      const isEmpty = e instanceof Error && /EMPTY_RESPONSE|TRUNCATED_RESPONSE/.test(e.message);
       if (!t.transient && !isEmpty) throw e;
       if (attempt < delays.length) {
         console.warn(`[analyzeAudio] transient attempt ${attempt + 1} failed${t.status ? ` (${t.status})` : ""}: ${t.message.slice(0, 200)} — retrying in ${delays[attempt]}ms`);
