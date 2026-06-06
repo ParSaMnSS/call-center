@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { useRealtimeCalls } from "@/lib/realtime-context";
+import { useRealtimeCalls, useRealtimeStatus } from "@/lib/realtime-context";
+import { createClient } from "@/lib/supabase/client";
 import type { Call, Sentiment } from "@/lib/supabase/types";
 import { StatusBadge } from "@/components/status-badge";
 import { SentimentDot } from "@/components/sentiment-dot";
@@ -58,6 +59,54 @@ export function CallsView({ initial }: { initial: Call[] }) {
       setCalls((prev) => prev.filter((c) => c.id !== row.id));
     },
   });
+
+  // Merge a batch of authoritative rows (returned by a server action) into
+  // state immediately, so the UI reflects the change without waiting on
+  // realtime. Rows already in the list are patched in place.
+  function applyRows(rows: Call[]) {
+    if (rows.length === 0) return;
+    setCalls((prev) => {
+      const byId = new Map(rows.map((r) => [r.id, r] as const));
+      return prev.map((c) => byId.get(c.id) ?? c);
+    });
+  }
+
+  // Optimistically flip a single row into the analyzing state right after a
+  // successful inline retry, so the row reacts instantly.
+  function markRetrying(id: string) {
+    setCalls((prev) =>
+      prev.map((c) =>
+        c.id === id ? { ...c, status: "analyzing", error_message: null } : c
+      )
+    );
+  }
+
+  // Reconnect reconciliation: if realtime drops and recovers, refetch the list
+  // so any deltas missed while the socket was down are picked up. Skips the
+  // initial mount (the page already provided fresh `initial`).
+  const { status: rtStatus } = useRealtimeStatus();
+  const didMountRef = useRef(false);
+  useEffect(() => {
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      return;
+    }
+    if (rtStatus !== "connected") return;
+    let cancelled = false;
+    (async () => {
+      const sb = createClient();
+      const { data } = await sb
+        .from("calls")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(500);
+      if (cancelled || !data) return;
+      setCalls(data as Call[]);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rtStatus]);
 
   const agents = useMemo(() => {
     const s = new Set<string>();
@@ -155,6 +204,7 @@ export function CallsView({ initial }: { initial: Call[] }) {
         <BulkActionsBar
           failedCount={failedCount}
           processingCount={processingCount}
+          onRowsUpdated={applyRows}
         />
       )}
 
@@ -321,6 +371,7 @@ export function CallsView({ initial }: { initial: Call[] }) {
                       allCalls={calls}
                       medianSec={medianSec}
                       onDeleted={(id) => setCalls((prev) => prev.filter((x) => x.id !== id))}
+                      onRetried={markRetrying}
                     />
                   ))}
                 </tbody>
@@ -337,6 +388,7 @@ export function CallsView({ initial }: { initial: Call[] }) {
                 allCalls={calls}
                 medianSec={medianSec}
                 onDeleted={(id) => setCalls((prev) => prev.filter((x) => x.id !== id))}
+                onRetried={markRetrying}
               />
             ))}
           </div>
@@ -423,12 +475,13 @@ function DeleteButton({ id, onDeleted, size = "sm" }: { id: string; onDeleted: (
 }
 
 function CallRow({
-  call: c, allCalls, medianSec, onDeleted,
+  call: c, allCalls, medianSec, onDeleted, onRetried,
 }: {
   call: Call;
   allCalls: Call[];
   medianSec: number | null;
   onDeleted: (id: string) => void;
+  onRetried: (id: string) => void;
 }) {
   const showQueue = c.status === "pending" || c.status === "analyzing" || c.status === "transcribing";
   const isFailed = c.status === "failed";
@@ -496,7 +549,7 @@ function CallRow({
       </td>
       <td className="text-left whitespace-nowrap">
         <div className="inline-flex items-center gap-1">
-          {isFailed && <InlineRetryButton id={c.id} />}
+          {isFailed && <InlineRetryButton id={c.id} onRetried={onRetried} />}
           <DeleteButton id={c.id} onDeleted={onDeleted} />
         </div>
       </td>
@@ -506,7 +559,7 @@ function CallRow({
 
 // Quick-retry icon button for failed rows. Hits the existing
 // /api/process/[id] endpoint that the detail page already uses.
-function InlineRetryButton({ id }: { id: string }) {
+function InlineRetryButton({ id, onRetried }: { id: string; onRetried: (id: string) => void }) {
   const [pending, setPending] = useState(false);
   const toast = useToast();
 
@@ -522,6 +575,7 @@ function InlineRetryButton({ id }: { id: string }) {
         toast.show(body.error || "خطا در تلاش مجدد", "error");
       } else {
         toast.show("تحلیل مجدد آغاز شد", "info");
+        onRetried(id);
       }
     } finally {
       setPending(false);
@@ -810,10 +864,11 @@ function FilterGroup({
 }
 
 function BulkActionsBar({
-  failedCount, processingCount,
+  failedCount, processingCount, onRowsUpdated,
 }: {
   failedCount: number;
   processingCount: number;
+  onRowsUpdated: (rows: Call[]) => void;
 }) {
   const toast = useToast();
   const confirm = useConfirm();
@@ -831,7 +886,10 @@ function BulkActionsBar({
     startRetry(async () => {
       const res = await retryAllFailed();
       if (res.error) toast.show(res.error, "error");
-      else toast.show(t.bulkRetried(res.count), "success");
+      else {
+        onRowsUpdated(res.rows);
+        toast.show(t.bulkRetried(res.count), "success");
+      }
     });
   }
 
@@ -847,7 +905,10 @@ function BulkActionsBar({
     startStop(async () => {
       const res = await cancelAllProcessing();
       if (res.error) toast.show(res.error, "error");
-      else toast.show(t.bulkCancelled(res.count), "info");
+      else {
+        onRowsUpdated(res.rows);
+        toast.show(t.bulkCancelled(res.count), "info");
+      }
     });
   }
 
@@ -879,12 +940,13 @@ function BulkActionsBar({
 }
 
 function CallCard({
-  call: c, allCalls, medianSec, onDeleted,
+  call: c, allCalls, medianSec, onDeleted, onRetried,
 }: {
   call: Call;
   allCalls: Call[];
   medianSec: number | null;
   onDeleted: (id: string) => void;
+  onRetried: (id: string) => void;
 }) {
   const showQueue = c.status === "pending" || c.status === "analyzing" || c.status === "transcribing";
   const isFailed = c.status === "failed";
@@ -917,7 +979,7 @@ function CallCard({
           </div>
         </div>
         <div className="flex items-center gap-1">
-          {isFailed && <InlineRetryButton id={c.id} />}
+          {isFailed && <InlineRetryButton id={c.id} onRetried={onRetried} />}
           <DeleteButton id={c.id} onDeleted={onDeleted} />
         </div>
       </div>
