@@ -3,28 +3,37 @@ import { z } from "zod";
 
 const MODEL = "gemini-2.5-flash-lite";
 
-const PROJECT = process.env.GOOGLE_CLOUD_PROJECT ?? "gen-lang-client-0324926987";
-const LOCATION = process.env.GOOGLE_CLOUD_LOCATION ?? "us-central1";
-
 // Lazy client: don't crash at module-eval time (e.g. during `next build` page
 // data collection) if the env var is missing. Throw only when actually used.
+// Supports both auth modes via GOOGLE_API_KEY (AI Studio) or Vertex AI
+// service-account credentials. AI Studio mode wins if GOOGLE_API_KEY is set,
+// so flipping back to AI Studio is one env var change.
 let _client: GoogleGenAI | null = null;
 function client(): GoogleGenAI {
   if (_client) return _client;
+
+  const apiKey = process.env.GOOGLE_API_KEY;
+  if (apiKey) {
+    _client = new GoogleGenAI({ apiKey });
+    return _client;
+  }
 
   const inlineJson = process.env.GOOGLE_CREDENTIALS_JSON;
   const credFile = process.env.GOOGLE_APPLICATION_CREDENTIALS;
 
   if (!inlineJson && !credFile) {
     throw new Error(
-      "احراز هویت Vertex AI تنظیم نشده است: GOOGLE_CREDENTIALS_JSON (در Vercel) یا GOOGLE_APPLICATION_CREDENTIALS (لوکال) را تنظیم کنید."
+      "احراز هویت تنظیم نشده است: GOOGLE_API_KEY یا اعتبارنامه Vertex AI (GOOGLE_CREDENTIALS_JSON / GOOGLE_APPLICATION_CREDENTIALS) را تنظیم کنید."
     );
   }
 
+  const project = process.env.GOOGLE_CLOUD_PROJECT ?? "gen-lang-client-0324926987";
+  const location = process.env.GOOGLE_CLOUD_LOCATION ?? "us-central1";
+
   const opts: ConstructorParameters<typeof GoogleGenAI>[0] = {
     vertexai: true,
-    project: PROJECT,
-    location: LOCATION,
+    project,
+    location,
   };
 
   if (inlineJson) {
