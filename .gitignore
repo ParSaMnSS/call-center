@@ -6,5 +6,6 @@ node_modules
 .DS_Store
 .vercel
 next-env.d.ts
+tsconfig.tsbuildinfo
 .claude/
 gen-lang-client-0324926987-e5c5f792d358.json
